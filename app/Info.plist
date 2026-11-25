@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>OpenLang listens to what this Mac plays to translate it live. Audio is not saved.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>OpenLang listens to the microphone to translate speech live. Audio is not saved.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>OpenLang turns speech into text on this Mac before translating it.</string>
+</dict>
+</plist>

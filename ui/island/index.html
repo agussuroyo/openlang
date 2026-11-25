@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenLang controls</title>
+<link rel="stylesheet" href="../shared/tokens.css">
+<link rel="stylesheet" href="island.css">
+</head>
+<body>
+<div class="island" id="island" role="status" aria-live="polite">
+  <div class="ic ic-idle" data-s="idle">
+    <button class="lead" data-do="start"><b id="idlePair"></b><span>Start</span></button>
+    <button class="link" data-do="settings">Settings</button>
+  </div>
+  <div class="ic ic-starting" data-s="starting"><span class="soft" id="startText">Starting</span></div>
+  <div class="ic ic-stopping" data-s="stopping"><span class="soft">Stopping</span></div>
+  <button class="ic ic-listening" data-s="listening" data-do="panel" aria-label="Open controls">
+    <b id="pair"></b><span class="num" id="clock">00:00</span>
+  </button>
+  <div class="ic ic-panel" data-s="panel">
+    <span class="tx"><b id="panelPair"></b><span id="note"></span></span>
+    <button class="btn" data-do="settings">Settings</button>
+    <button class="btn main" data-do="stop">Stop</button>
+  </div>
+  <div class="ic ic-preparing" data-s="preparing">
+    <svg class="ring" viewBox="0 0 32 32" aria-hidden="true"><circle class="bg" cx="16" cy="16" r="13"/><circle class="fg" id="ring" cx="16" cy="16" r="13"/></svg>
+    <span class="tx"><b>Downloading model</b><span id="model"></span></span>
+    <span class="num" id="pct">0%</span>
+  </div>
+  <div class="ic ic-error" data-s="error">
+    <span class="tx"><b id="errTitle"></b><span id="errDetail"></span></span>
+    <button class="btn main" id="errAct"></button>
+    <button class="btn" data-do="dismiss">Close</button>
+  </div>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

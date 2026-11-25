@@ -1,0 +1,58 @@
+import Foundation
+import Translation
+
+final class TranslatorSession: @unchecked Sendable {
+    let session: TranslationSession
+    init(_ session: TranslationSession) { self.session = session }
+}
+
+@_cdecl("ol_tr_languages")
+public func olTrLanguages() -> UnsafeMutablePointer<CChar>? {
+    let tags = try? blocking {
+        Set(await LanguageAvailability().supportedLanguages.map { $0.minimalIdentifier }).sorted()
+    }.get()
+    return strdup((tags ?? []).joined(separator: "\n"))
+}
+
+/// 0 ready, 1 the system can download it, 2 unsupported.
+@_cdecl("ol_tr_status")
+public func olTrStatus(_ source: UnsafePointer<CChar>, _ target: UnsafePointer<CChar>) -> Int32 {
+    let source = Locale.Language(identifier: string(source))
+    let target = Locale.Language(identifier: string(target))
+    let status = try? blocking { await LanguageAvailability().status(from: source, to: target) }.get()
+    switch status {
+    case .installed: return 0
+    case .supported: return 1
+    default: return 2
+    }
+}
+
+@_cdecl("ol_tr_open")
+public func olTrOpen(_ source: UnsafePointer<CChar>, _ target: UnsafePointer<CChar>)
+    -> UnsafeMutableRawPointer
+{
+    let session = TranslationSession(
+        installedSource: Locale.Language(identifier: string(source)),
+        target: Locale.Language(identifier: string(target)))
+    return Unmanaged.passRetained(TranslatorSession(session)).toOpaque()
+}
+
+@_cdecl("ol_tr_translate")
+public func olTrTranslate(
+    _ session: UnsafeMutableRawPointer, _ source: UnsafePointer<CChar>,
+    _ error: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> UnsafeMutablePointer<CChar>? {
+    let translator = Unmanaged<TranslatorSession>.fromOpaque(session).takeUnretainedValue()
+    let source = string(source)
+    switch blocking({ try await translator.session.translate(source).targetText }) {
+    case .success(let translated): return strdup(translated)
+    case .failure(let failure):
+        error.pointee = text(failure)
+        return nil
+    }
+}
+
+@_cdecl("ol_tr_close")
+public func olTrClose(_ session: UnsafeMutableRawPointer) {
+    Unmanaged<TranslatorSession>.fromOpaque(session).release()
+}

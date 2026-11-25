@@ -1,0 +1,16 @@
+html,body{background:transparent}
+body{padding:6px;display:flex}
+body.dragging .panel,body.dragging .w{cursor:grabbing}
+
+/* Read along: opaque, so contrast holds over any film */
+.panel{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;gap:4px;padding:10px 14px 12px;border-radius:var(--r-panel);background:var(--card);cursor:grab;transition:opacity .2s ease}
+.panel.quiet{opacity:0}
+.original{flex:none;padding:0 calc(var(--size) * .2);color:var(--muted);font-size:var(--size);line-height:1.4;max-height:1.4em;overflow:hidden;white-space:nowrap;direction:rtl;text-align:left;text-overflow:ellipsis}
+.original bdi{unicode-bidi:isolate}
+.view{flex:1 1 auto;min-height:0;overflow:hidden;position:relative}
+.read{position:relative;padding:0 .2em;color:var(--unread);font-size:var(--size);font-weight:600;letter-spacing:-.02em;line-height:1.45;will-change:transform}
+.seg{display:block}
+.w{position:relative;z-index:1;transition:color .18s ease}
+.w.past{color:var(--text)}
+.w.now{color:var(--on-inverse)}
+.pill{position:absolute;left:0;top:0;height:1.3em;border-radius:.34em;background:var(--inverse);will-change:transform,width,opacity;pointer-events:none}

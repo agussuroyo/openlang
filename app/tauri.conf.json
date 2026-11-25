@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenLang",
+  "identifier": "dev.openlang.app",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    },
+    "windows": [
+      {
+        "label": "caption",
+        "url": "caption/index.html",
+        "title": "OpenLang subtitles",
+        "width": 480,
+        "height": 120,
+        "minWidth": 240,
+        "minHeight": 80,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "acceptFirstMouse": true,
+        "visible": false
+      },
+      {
+        "label": "island",
+        "url": "island/index.html",
+        "title": "OpenLang controls",
+        "width": 196,
+        "height": 50,
+        "resizable": false,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "acceptFirstMouse": true,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "category": "Utility",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "26.0",
+      "signingIdentity": "-",
+      "entitlements": "entitlements.plist"
+    }
+  }
+}

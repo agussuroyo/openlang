@@ -1,0 +1,11 @@
+{
+  "identifier": "main",
+  "windows": [
+    "caption",
+    "island",
+    "settings"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

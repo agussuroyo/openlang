@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+openlang-core = { path = "crates/core" }
+openlang-apple-bridge = { path = "crates/apple-bridge" }
+openlang-audio-coreaudio = { path = "crates/audio-coreaudio" }
+openlang-audio-cpal = { path = "crates/audio-cpal" }
+openlang-audio-dsp = { path = "crates/audio-dsp" }
+openlang-contract = { path = "crates/contract" }
+openlang-provider-openai = { path = "crates/provider-openai" }
+openlang-provider-whisper = { path = "crates/provider-whisper" }
+openlang-speech-chunks = { path = "crates/speech-chunks" }
+openlang-provider-apple = { path = "crates/provider-apple" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+rtrb = "0.3"
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

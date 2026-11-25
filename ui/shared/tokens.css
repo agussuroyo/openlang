@@ -1,0 +1,36 @@
+/* Single source for colour, type, radius and shared springs ("stiffness damping").
+   System font: no download, and it already covers every script a caption can be in. */
+:root{
+  --card:#171717; --surface:#262626; --object:#2c2c2c;
+  --fill-1:rgba(255,255,255,.05); --fill-2:rgba(255,255,255,.09); --fill-3:rgba(255,255,255,.14);
+  --line:rgba(255,255,255,.12);
+  --text:#fff; --text-2:rgba(255,255,255,.78); --muted:#a3a3a3; --unread:#8f8f8f;
+  --inverse:#fff; --on-inverse:#000;
+  --live:#3ce085; --warn:#ffb340;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --r-row:12px; --r-panel:18px; --r-sheet:24px; --r-pill:999px;
+  --spring-soft:260 24;
+  --island-w:380 24; --island-h:300 22; --island-radius:32;
+  --read-lead:520 40; --read-trail:210 26; --read-line:600 48; --read-fade:300 30;
+  --bar-label:300 26; --bar-pop:520 14; --bar-pill:340 28;
+  --press:520 18;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --card:#f7f7f6; --surface:#fff; --object:#e6e5e2;
+    --fill-1:rgba(23,24,26,.04); --fill-2:rgba(23,24,26,.07); --fill-3:rgba(23,24,26,.12);
+    --line:rgba(23,24,26,.16);
+    --text:#17181a; --text-2:#3c3b37; --muted:#62615c; --unread:#73726c;
+    --inverse:#0e0f11; --on-inverse:#f4f3f1;
+    --live:#136c34; --warn:#8f4a05;
+    color-scheme:light;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);color:var(--text);-webkit-font-smoothing:antialiased;overflow:hidden;user-select:none;-webkit-user-select:none}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+[hidden]{display:none!important}
