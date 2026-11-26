@@ -17,11 +17,11 @@ const uid = () => `f${ids++}`;
 
 // Building blocks. Each one makes one kind of thing and knows nothing about settings.
 function heading(title, text) {
-  return h('header', { className: 'head' }, h('h2', { textContent: title }), h('p', { textContent: text }));
+  return h('header', { className: 'head' }, h('h1', { textContent: title }), h('p', { textContent: text }));
 }
 function group(title, rows, note) {
   return h('div', { className: 'group' },
-    title && h('h3', { textContent: title }),
+    title && h('h2', { textContent: title }),
     h('div', { className: 'panel' }, ...rows),
     note && h('p', { className: 'note', textContent: note }));
 }
@@ -104,10 +104,11 @@ function language() {
   if (stt?.languages.can_detect) spoken.unshift(['', languageName(null)]);
   const target = byName(tr?.languages.tags ?? []);
   const keep = (list, v) => list.some(([x]) => x === v) ? list : [[v, `${languageName(v)} (not supported by this engine)`], ...list];
+  const autoNote = s.source_language ? null : 'Listens for a few seconds first, then picks the language it hears.';
   return [
     heading('Language', 'Choose what you hear and what you read.'),
     group(null, [
-      row('Spoken language', null, select(keep(spoken, s.source_language ?? ''), s.source_language ?? '',
+      row('Spoken language', autoNote, select(keep(spoken, s.source_language ?? ''), s.source_language ?? '',
         v => save({ source_language: v || null }, true))),
       row('Translate to', null, select(keep(target, s.target_language), s.target_language,
         v => save({ target_language: v }, true))),

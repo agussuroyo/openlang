@@ -10,13 +10,13 @@ main{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;mask-image:linear-
 section[role=tabpanel]{display:flex;flex-direction:column;gap:24px;padding-bottom:16px;animation:enter .24s var(--ease)}
 @keyframes enter{from{opacity:0;transform:translateY(6px)}}
 
-.head h2{font-size:24px;font-weight:700;letter-spacing:-.02em;line-height:1.15}
+.head h1{font-size:24px;font-weight:700;letter-spacing:-.02em;line-height:1.15}
 .head p{margin-top:4px;font-size:14px;line-height:1.45;color:var(--muted)}
 .hint{font-size:13px;line-height:1.45;color:var(--muted)}
 .problem{font-size:13px;line-height:1.45;color:var(--warn);margin-bottom:16px}
 
 /* A group is a titled panel of rows, one tone step above the window. */
-.group h3{margin:0 4px 8px;font-size:13px;font-weight:600;color:var(--text-2)}
+.group h2{margin:0 4px 8px;font-size:13px;font-weight:600;color:var(--text-2)}
 .group>.note{margin:8px 4px 0;font-size:12px;line-height:1.45;color:var(--muted)}
 .panel{background:var(--surface);border-radius:var(--r-row);overflow:hidden;box-shadow:var(--raise)}
 .panel>*+*{border-top:1px solid var(--fill-2)}
