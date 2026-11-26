@@ -1,5 +1,9 @@
-/* Movie subtitles: no panel, white text with a dark shadow so it reads over any video. */
-:root{--sub-shadow:0 0 2px rgba(0,0,0,.9),0 1px 3px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.6)}
+/* Movie subtitles: no panel, white text with a thin sharp outline so it reads over any video.
+   A wide soft blur looks like a grey smudge on white backgrounds. */
+:root{
+  --sub-edge:.06em; --sub-ink:rgba(0,0,0,.9);
+  --sub-shadow:calc(var(--sub-edge) * -1) calc(var(--sub-edge) * -1) 0 var(--sub-ink),var(--sub-edge) calc(var(--sub-edge) * -1) 0 var(--sub-ink),calc(var(--sub-edge) * -1) var(--sub-edge) 0 var(--sub-ink),var(--sub-edge) var(--sub-edge) 0 var(--sub-ink),0 .05em .12em rgba(0,0,0,.5);
+}
 html,body{background:transparent}
 body{padding:6px;display:flex;font-family:var(--sub-font,var(--font))}
 body.dragging .subtitle{cursor:grabbing}
