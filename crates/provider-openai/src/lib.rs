@@ -1,4 +1,4 @@
-//! Any OpenAI-compatible server: Ollama or LM Studio on this computer, or a cloud with your own key.
+//! OpenAI-compatible servers: Ollama or LM Studio on this computer, or a cloud service with your own key.
 
 mod chat;
 mod client;

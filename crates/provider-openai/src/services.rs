@@ -70,4 +70,51 @@ pub const SERVICES: &[Service] = &[
         }),
         speech: Some(SpeechApi::DeepSeek),
     },
+    Service {
+        id: "openai",
+        name: "OpenAI",
+        summary: "OpenAI cloud with your own key. Hears speech and translates.",
+        address: Address::Fixed("https://api.openai.com/v1"),
+        translate: Some(Translate {
+            model: "gpt-6-luna",
+            extra: r#"{"reasoning_effort": "none"}"#,
+        }),
+        speech: Some(SpeechApi::OpenAi {
+            model: "gpt-transcribe",
+        }),
+    },
+    Service {
+        id: "openrouter",
+        name: "OpenRouter",
+        summary: "Many models with one key.",
+        address: Address::Fixed("https://openrouter.ai/api/v1"),
+        translate: Some(Translate {
+            model: "deepseek/deepseek-v4.1-flash",
+            extra: r#"{"temperature": 0, "reasoning": {"enabled": false}}"#,
+        }),
+        speech: None,
+    },
+    // Kimi K3 and GLM-5.3 always think and refuse a changed temperature, so they think less.
+    Service {
+        id: "kimi",
+        name: "Kimi",
+        summary: "Moonshot AI cloud with your own key.",
+        address: Address::Fixed("https://api.moonshot.ai/v1"),
+        translate: Some(Translate {
+            model: "kimi-k3",
+            extra: r#"{"reasoning_effort": "low"}"#,
+        }),
+        speech: None,
+    },
+    Service {
+        id: "zai",
+        name: "Z.ai GLM",
+        summary: "Z.ai cloud with your own key.",
+        address: Address::Fixed("https://api.z.ai/api/paas/v4"),
+        translate: Some(Translate {
+            model: "glm-5.3-flash",
+            extra: r#"{"reasoning_effort": "low"}"#,
+        }),
+        speech: None,
+    },
 ];

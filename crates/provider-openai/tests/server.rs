@@ -267,3 +267,25 @@ fn every_service_is_well_formed() {
         assert!(extra.is_object(), "{}", s.extra);
     }
 }
+
+#[test]
+fn openai_hears_and_reads_the_detected_language() {
+    let (base, seen) = serve(
+        "200 OK",
+        r#"{"text":"bonjour","languages":[{"code":"fr"}]}"#,
+    );
+    let r = moved("openai", &base);
+    let job = Job {
+        options: options(&[("key", "k")]),
+        ..job(&base, "k")
+    };
+    let heard = hear(r.stt[0].as_ref(), &job);
+    assert_eq!(heard[0].text, "bonjour");
+    assert_eq!(heard[0].language.as_deref(), Some("fr"));
+    let request = text_of(seen.recv().unwrap());
+    assert!(
+        request.starts_with("POST /audio/transcriptions"),
+        "{request}"
+    );
+    assert!(request.contains("gpt-transcribe"), "{request}");
+}
