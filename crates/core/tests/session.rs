@@ -525,11 +525,12 @@ fn cancel_does_not_wait_for_queued_work() {
 }
 
 #[test]
-fn loudness_maps_silence_to_zero_and_full_scale_to_one() {
+fn loudness_ignores_room_noise_and_fills_with_loud_sound() {
     use openlang_core::session::loudness;
     assert_eq!(loudness(&[]), 0.0);
     assert_eq!(loudness(&[0.0; 160]), 0.0);
     assert_eq!(loudness(&[1.0, -1.0, 1.0, -1.0]), 1.0);
+    assert_eq!(loudness(&[0.002, -0.002]), 0.0, "-54 dB room noise");
     let speech = loudness(&[0.1, -0.1, 0.1, -0.1]);
-    assert!((speech - 2.0 / 3.0).abs() < 1e-3, "{speech}");
+    assert!((speech - 0.75).abs() < 1e-3, "-20 dB speech: {speech}");
 }

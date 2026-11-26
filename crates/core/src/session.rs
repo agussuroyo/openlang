@@ -254,14 +254,19 @@ struct Pump {
     level: f32,
 }
 
-/// Loudness of a chunk from 0 to 1: RMS on a 60 dB scale, so speech fills most of it.
+/// Room noise and quieter, in dBFS. It counts as quiet.
+const NOISE_FLOOR: f32 = -50.0;
+/// Loud speech or music, in dBFS. It fills the scale.
+const LOUD: f32 = -10.0;
+
+/// Loudness of a chunk from 0 to 1, from its RMS between `NOISE_FLOOR` and `LOUD`.
 pub fn loudness(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
     let power = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
     let decibels = 10.0 * power.max(1e-12).log10();
-    ((decibels + 60.0) / 60.0).clamp(0.0, 1.0)
+    ((decibels - NOISE_FLOOR) / (LOUD - NOISE_FLOOR)).clamp(0.0, 1.0)
 }
 
 impl Pump {

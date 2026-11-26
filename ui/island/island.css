@@ -26,7 +26,7 @@ body[data-v=end]{align-items:flex-end}
 .ic-listening .num{margin-left:auto;padding-left:2px;color:var(--live)}
 /* Sound bars follow the real level. Only transform changes, so it stays cheap. */
 .bars{display:flex;flex:none;align-items:center;gap:2px;height:14px}
-.bars i{width:3px;height:14px;border-radius:2px;background:var(--live);transform:scaleY(.25);transition:transform .1s linear}
+.bars i{width:3px;height:14px;border-radius:2px;background:var(--live);transform:scaleY(.2);transition:transform .1s linear}
 body[data-bars=off] .bars{display:none}
 .ic-panel{width:286px}
 .ic-preparing{width:224px}
