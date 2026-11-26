@@ -23,14 +23,67 @@ pub struct Settings {
     pub translators: Vec<String>,
     pub options: BTreeMap<String, Options>,
     pub allow_network: bool,
-    pub text_size: u32,
-    pub show_original: bool,
+    pub subtitle: SubtitleStyle,
     /// The caption ignores the mouse; the controls never do.
     pub click_through: bool,
     pub caption_place: Place,
     pub caption_size: (f64, f64),
     pub island_place: Place,
     pub island_mode: IslandMode,
+}
+
+/// How subtitles look. The caption window turns each field into CSS.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SubtitleStyle {
+    pub show: SubtitleShow,
+    pub text_size: u32,
+    /// `None` uses the system font.
+    pub font: Option<String>,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubtitleShow {
+    Both,
+    Translation,
+    Original,
+}
+
+impl Default for SubtitleStyle {
+    fn default() -> Self {
+        Self {
+            show: SubtitleShow::Both,
+            text_size: 14,
+            font: None,
+            color: "#ffffff".into(),
+        }
+    }
+}
+
+impl SubtitleStyle {
+    /// Keeps hand-edited values from breaking the caption CSS.
+    fn fit(self) -> Self {
+        let is_hex = |c: &str| {
+            c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|x| x.is_ascii_hexdigit())
+        };
+        let is_font_name = |f: &String| {
+            !f.trim().is_empty()
+                && f.chars()
+                    .all(|x| x.is_alphanumeric() || x == ' ' || x == '-')
+        };
+        Self {
+            text_size: self.text_size.clamp(11, 40),
+            font: self.font.filter(is_font_name),
+            color: if is_hex(&self.color) {
+                self.color
+            } else {
+                Self::default().color
+            },
+            ..self
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,8 +105,7 @@ impl Default for Settings {
             translators: vec![],
             options: BTreeMap::new(),
             allow_network: false,
-            text_size: 14,
-            show_original: true,
+            subtitle: SubtitleStyle::default(),
             click_through: false,
             caption_place: Place::preset(Edge::Middle, Edge::End),
             caption_size: (480.0, 120.0),
@@ -97,6 +149,7 @@ impl Settings {
                 .map(|x| ids(x.descriptor()))
                 .collect::<Vec<_>>(),
         );
+        self.subtitle = self.subtitle.fit();
         self
     }
 
@@ -105,8 +158,7 @@ impl Settings {
         let look = |s: &Self| {
             let d = Self::default();
             Self {
-                text_size: d.text_size,
-                show_original: d.show_original,
+                subtitle: d.subtitle,
                 click_through: d.click_through,
                 caption_place: d.caption_place,
                 caption_size: d.caption_size,
@@ -237,12 +289,38 @@ mod tests {
     fn appearance_changes_do_not_restart_the_session() {
         let a = Settings::default();
         assert!(!a.pipeline_differs(&Settings {
-            text_size: 40,
+            subtitle: SubtitleStyle {
+                text_size: 40,
+                ..SubtitleStyle::default()
+            },
             ..a.clone()
         }));
         assert!(a.pipeline_differs(&Settings {
             target_language: "ja".into(),
             ..a.clone()
         }));
+    }
+
+    #[test]
+    fn bad_subtitle_values_fall_back() {
+        let fitted = SubtitleStyle {
+            text_size: 400,
+            font: Some("x;}body{".into()),
+            color: "red;}".into(),
+            ..SubtitleStyle::default()
+        }
+        .fit();
+        assert_eq!(fitted.text_size, 40);
+        assert_eq!(fitted.font, None);
+        assert_eq!(fitted.color, "#ffffff");
+
+        let kept = SubtitleStyle {
+            font: Some("Helvetica Neue".into()),
+            color: "#FFCC00".into(),
+            ..SubtitleStyle::default()
+        }
+        .fit();
+        assert_eq!(kept.font.as_deref(), Some("Helvetica Neue"));
+        assert_eq!(kept.color, "#FFCC00");
     }
 }
