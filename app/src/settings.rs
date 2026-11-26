@@ -99,7 +99,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             sources: vec![],
-            source_language: Some("en-US".into()),
+            source_language: None,
             target_language: "id".into(),
             stt: vec![],
             translators: vec![],
