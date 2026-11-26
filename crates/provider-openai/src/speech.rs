@@ -12,11 +12,14 @@ impl Api for SpeechApi {
     fn model_field(&self) -> Option<&'static str> {
         match self {
             SpeechApi::Whisper => Some(""),
+            SpeechApi::OpenAi { .. } | SpeechApi::DeepSeek => None,
         }
     }
     fn can_detect(&self) -> bool {
         match self {
-            SpeechApi::Whisper => true,
+            SpeechApi::Whisper | SpeechApi::OpenAi { .. } => true,
+            // It hears every language but never says which one.
+            SpeechApi::DeepSeek => false,
         }
     }
 }
@@ -52,6 +55,8 @@ impl Recognizer for Listen {
         let wav = wav(samples);
         match self.api {
             SpeechApi::Whisper => self.whisper(&wav),
+            SpeechApi::OpenAi { model } => self.open_ai(model, &wav),
+            SpeechApi::DeepSeek => self.deep_seek(&wav),
         }
     }
 }
@@ -67,6 +72,24 @@ impl Listen {
         Ok(Heard {
             text: crate::text(&reply["text"])?,
             language: detected(&reply["language"]),
+        })
+    }
+
+    fn open_ai(&self, model: &str, wav: &[u8]) -> Result<Heard> {
+        let reply = self
+            .client
+            .upload("audio/transcriptions", &[("model", model)], wav)?;
+        Ok(Heard {
+            text: crate::text(&reply["text"])?,
+            language: detected(&reply["languages"][0]["code"]),
+        })
+    }
+
+    fn deep_seek(&self, wav: &[u8]) -> Result<Heard> {
+        let reply = self.client.upload("v1/tools/asr", &[], wav)?;
+        Ok(Heard {
+            text: crate::text(&reply["text"])?,
+            language: None,
         })
     }
 }

@@ -19,6 +19,10 @@ pub struct Translate {
 pub enum SpeechApi {
     /// `audio/transcriptions` of a Whisper-like server. The user types the model.
     Whisper,
+    /// OpenAI `gpt-transcribe`: detected languages come back in `languages`.
+    OpenAi { model: &'static str },
+    /// DeepSeek `v1/tools/asr`: only the audio file, no language in or out.
+    DeepSeek,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -53,5 +57,17 @@ pub const SERVICES: &[Service] = &[
             extra: r#"{"temperature": 0}"#,
         }),
         speech: None,
+    },
+    Service {
+        id: "deepseek",
+        name: "DeepSeek",
+        summary: "DeepSeek cloud with your own key. Hears speech and translates.",
+        address: Address::Fixed("https://api.deepseek.com"),
+        // Thinking is on by default and too slow for live captions.
+        translate: Some(Translate {
+            model: "deepseek-flash",
+            extra: r#"{"thinking": {"type": "disabled"}}"#,
+        }),
+        speech: Some(SpeechApi::DeepSeek),
     },
 ];
