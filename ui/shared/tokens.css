@@ -4,14 +4,12 @@
   --card:#171717; --surface:#262626; --object:#2c2c2c;
   --fill-1:rgba(255,255,255,.05); --fill-2:rgba(255,255,255,.09); --fill-3:rgba(255,255,255,.14);
   --line:rgba(255,255,255,.12);
-  --text:#fff; --text-2:rgba(255,255,255,.78); --muted:#a3a3a3; --unread:#8f8f8f;
+  --text:#fff; --text-2:rgba(255,255,255,.78); --muted:#a3a3a3;
   --inverse:#fff; --on-inverse:#000;
   --live:#3ce085; --warn:#ffb340;
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-  --r-row:12px; --r-panel:18px; --r-sheet:24px; --r-pill:999px;
-  --spring-soft:260 24;
+  --r-row:12px; --r-sheet:24px; --r-pill:999px;
   --island-w:380 24; --island-h:300 22; --island-radius:32;
-  --read-lead:520 40; --read-trail:210 26; --read-line:600 48; --read-fade:300 30;
   --bar-label:300 26; --bar-pop:520 14; --bar-pill:340 28;
   --press:520 18;
   color-scheme:dark;
@@ -21,7 +19,7 @@
     --card:#f7f7f6; --surface:#fff; --object:#e6e5e2;
     --fill-1:rgba(23,24,26,.04); --fill-2:rgba(23,24,26,.07); --fill-3:rgba(23,24,26,.12);
     --line:rgba(23,24,26,.16);
-    --text:#17181a; --text-2:#3c3b37; --muted:#62615c; --unread:#73726c;
+    --text:#17181a; --text-2:#3c3b37; --muted:#62615c;
     --inverse:#0e0f11; --on-inverse:#f4f3f1;
     --live:#136c34; --warn:#8f4a05;
     color-scheme:light;
