@@ -1,5 +1,6 @@
 //! Domain model, ports and the processing graph. Knows no OS, UI or provider.
 
+pub mod auto_language;
 pub mod domain;
 pub mod error;
 pub mod graph;

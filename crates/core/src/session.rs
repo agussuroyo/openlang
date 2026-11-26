@@ -142,7 +142,10 @@ impl Session {
             let audio = b.root(Box::new(TransformNode::new(
                 resampler.create(AudioFormat::SPEECH),
             )))?;
-            let transcript = b.add(Box::new(SttNode::new(stt.clone(), origin)), &[audio])?;
+            let transcript = b.add(
+                Box::new(SttNode::new(stt.clone(), registry.detector.clone(), origin)),
+                &[audio],
+            )?;
             let translation = b.add(
                 Box::new(TranslateNode::new(
                     translators.clone(),

@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     Error, Result,
+    auto_language::{AutoLanguage, needs_detector},
     domain::*,
     graph::{Emitter, Node, QueuePolicy},
     ports::*,
@@ -102,13 +103,18 @@ impl Segmenter {
 
 pub struct SttNode {
     providers: Vec<(Arc<dyn SpeechToText>, Job)>,
+    detector: Option<Arc<dyn LanguageDetector>>,
     segmenter: Arc<Mutex<Segmenter>>,
     session: Option<Box<dyn SttSession>>,
 }
 
 impl SttNode {
-    /// Providers are tried in order until one opens.
-    pub fn new(providers: Vec<(Arc<dyn SpeechToText>, Job)>, origin: Origin) -> Self {
+    /// Providers are tried in order until one opens. `detector` serves those that cannot detect.
+    pub fn new(
+        providers: Vec<(Arc<dyn SpeechToText>, Job)>,
+        detector: Option<Arc<dyn LanguageDetector>>,
+        origin: Origin,
+    ) -> Self {
         let language = providers
             .first()
             .and_then(|(_, j)| j.source.clone())
@@ -122,9 +128,27 @@ impl SttNode {
         };
         Self {
             providers,
+            detector,
             segmenter: Arc::new(Mutex::new(segmenter)),
             session: None,
         }
+    }
+
+    fn open(
+        &self,
+        provider: &Arc<dyn SpeechToText>,
+        job: &Job,
+        out: SttOutput,
+    ) -> Result<Box<dyn SttSession>> {
+        let Some(detector) = self
+            .detector
+            .as_deref()
+            .filter(|_| needs_detector(provider.as_ref(), job))
+        else {
+            return provider.open(job, out);
+        };
+        let auto = AutoLanguage::open(provider.clone(), job.clone(), detector, out)?;
+        Ok(Box::new(auto))
     }
 }
 
@@ -152,7 +176,7 @@ impl Node for SttNode {
         });
         let mut last = Error::Config("no speech recognizer selected".into());
         for (provider, job) in &self.providers {
-            match provider.open(job, output.clone()) {
+            match self.open(provider, job, output.clone()) {
                 Ok(session) => {
                     self.session = Some(session);
                     return Ok(());
