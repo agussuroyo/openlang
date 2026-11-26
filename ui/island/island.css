@@ -35,7 +35,8 @@ body[data-v=end]{align-items:flex-end}
 .btn{flex:none;height:30px;padding:0 10px;border-radius:10px;background:var(--fill-3);font-size:12px;font-weight:500;transition:transform .16s cubic-bezier(.23,1,.32,1)}
 .btn.main{background:var(--inverse);color:var(--on-inverse)}
 .btn:active{transform:scale(.97)}
-.ring{width:24px;height:24px;flex:none;transform:rotate(-90deg)}
+.btn.icon{display:grid;place-items:center;width:30px;padding:0;border-radius:50%}
+.btn.icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.ring{width:24px;height:24px;flex:none;transform:rotate(-90deg)}
 .ring circle{fill:none;stroke-width:3.5}
 .ring .bg{stroke:var(--fill-3)}
 .ring .fg{stroke:var(--live);stroke-linecap:round;stroke-dasharray:81.7;stroke-dashoffset:81.7}
