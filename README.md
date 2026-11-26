@@ -51,4 +51,4 @@ cargo test --workspace   # memakai `say`; uji Whisper mengunduh model 60 MB seka
 - Pembicara di audio sistem tidak dipisahkan.
 - Ikon aplikasi masih placeholder polos.
 
-Gerak Read along, Morph island, dan Bottom bar mengikuti https://designbookmark.com/motion.
+Gerak Morph island dan Bottom bar mengikuti https://designbookmark.com/motion.

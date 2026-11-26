@@ -47,7 +47,7 @@ Test notes:
 
 **Extending without touching the pipeline.** `session::Extension::attach` gets `Taps` (node ids for audio/transcript/translation/caption) to add branches, such as future TTS or history. An `EventSink` receives serializable `SessionEvent`s (versioned by `EVENT_SCHEMA`). `core/tests/session.rs` shows both, using test-only nodes.
 
-**Segments.** Providers only emit `SttUpdate { text, start, end, is_final }`. `SttNode`'s segmenter assigns `SegmentId` and revision. Partials and the final of one utterance share an id, and the UI updates words in place by that id. `Stabilizer` marks the common word prefix of consecutive revisions as stable. Only stable words are "read" by the pill animation.
+**Segments.** Providers only emit `SttUpdate { text, start, end, is_final }`. `SttNode`'s segmenter assigns `SegmentId` and revision. Partials and the final of one utterance share an id, and the UI updates the text in place by that id. `Stabilizer` marks the common word prefix of consecutive revisions as stable (`Caption::stable_words`); the subtitle UI does not use it now.
 
 **Realtime audio.** Audio callbacks only write to an `rtrb` ring via `realtime::AudioWriter`: no locks, allocation or logging. Lost samples are counted. A source calls `Invalidator::invalidate` on device change; the session pump then reopens the source.
 
@@ -70,7 +70,7 @@ Test notes:
 ## App shell (`app/`)
 
 - Windows:
-  - `caption`: Read along subtitles. It hides itself when quiet so it never blocks clicks.
+  - `caption`: Movie style subtitles on a transparent window, newest sentence only. It hides itself when quiet so it never blocks clicks. Look comes from `Settings::subtitle` (`SubtitleStyle`): `ui/caption/style.js` maps each field to a CSS variable, so a new option is one Rust field, one mapping line and one Settings control.
   - `island`: Morph island controls. The window is resized to the island shape and grows away from the screen edge it is anchored to.
   - `settings`: created on demand, destroyed on close.
 - Placement is pure geometry in `placement.rs` (logical points, multi-monitor, snap, never overlap) and has unit tests. `windows.rs` applies it. Dragging is manual (`ui/shared/drag.js` → `drag_start/move/end`), not Tauri drag regions. `watch_displays` re-arranges when displays change or wake; while every display sleeps the monitor list is empty.
@@ -83,7 +83,7 @@ Test notes:
 - No bundler and no dependencies. ES modules use `window.__TAURI__` (`withGlobalTauri`).
 - `shared/tokens.css` is the single source for colours (light and dark), radii and spring values ("stiffness damping").
 - `shared/motion.js` is a spring engine with one rAF loop that sleeps when everything is at rest. Keep it sleeping when idle.
-- Component motion follows https://designbookmark.com/motion. Read along, Morph island and Bottom bar keep their original spring values.
+- Component motion follows https://designbookmark.com/motion. Morph island and Bottom bar keep their original spring values.
 
 ## macOS gotchas
 
