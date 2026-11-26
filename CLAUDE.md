@@ -57,6 +57,7 @@ Test notes:
   - The Swift `Gate` guarantees no callback after `ol_stt_finish` returns; Rust frees the callback box relying on that.
   - Apple STT uses `SpeechTranscriber`, falling back to `DictationTranscriber` for locales such as `id-ID`. It cannot auto-detect the language.
   - Translation uses `TranslationSession(installedSource:)` with the default high-fidelity strategy (low-latency packs are not installed). It warms up on open.
+- `core/src/auto_language.rs`: Auto language for a recognizer that cannot detect (Apple). `LanguageDetector` (Whisper base model, `provider-whisper/src/detect.rs`) hears 3 s windows on its own thread; the recognizer opens with the detected primary tag (Apple accepts `id`) and gets the waiting audio. Switching needs the same new language twice in a row. Default spoken language is Auto.
 - `speech-chunks`: shared by non-streaming engines (Whisper, OpenAI-compatible). It cuts at pauses with an energy VAD, and a slow engine skips partials but never finals.
 - `provider-openai`:
   - `location()` is `OnDevice` only for loopback URLs.
