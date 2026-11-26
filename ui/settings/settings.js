@@ -151,14 +151,16 @@ function places(title, name, place) {
   return h('div', { className: 'field' }, h('h3', { textContent: title }), grid, h('p', { className: 'hint', textContent: note }));
 }
 
+const saveSubtitle = change => save({ subtitle: { ...data.settings.subtitle, ...change } });
+
 function display() {
   const s = data.settings;
-  const size = h('input', { type: 'range', min: 11, max: 40, step: 1, value: s.text_size });
-  const num = h('span', { className: 'num', textContent: `${s.text_size} px` });
+  const size = h('input', { type: 'range', min: 11, max: 40, step: 1, value: s.subtitle.text_size });
+  const num = h('span', { className: 'num', textContent: `${s.subtitle.text_size} px` });
   const sample = h('p', { className: 'sample', textContent: 'Subtitle size preview' });
-  sample.style.fontSize = s.text_size + 'px';
+  sample.style.fontSize = s.subtitle.text_size + 'px';
   size.addEventListener('input', () => { num.textContent = `${size.value} px`; sample.style.fontSize = size.value + 'px'; });
-  size.addEventListener('change', () => save({ text_size: Number(size.value) }));
+  size.addEventListener('change', () => saveSubtitle({ text_size: Number(size.value) }));
   size.id = 'size';
   return [
     h('h2', { textContent: 'Display' }),
@@ -172,7 +174,11 @@ function display() {
     ], s.island_mode, v => save({ island_mode: v })), 'While hidden, use Control+Option+L or the OpenLang menu.'),
     h('div', { className: 'field' }, h('label', { htmlFor: 'size', textContent: 'Text size' }), h('div', { className: 'row' }, size, num)),
     sample,
-    check('Show original text', 'One line above the translation.', s.show_original, v => save({ show_original: v })),
+    field('Subtitle text', select([
+      ['both', 'Original and translation'],
+      ['translation', 'Translation only'],
+      ['original', 'Original only'],
+    ], s.subtitle.show, v => saveSubtitle({ show: v }))),
     check('Click through subtitles', 'Clicks go to the app underneath. Turn it off here.', s.click_through, v => save({ click_through: v })),
     h('p', { className: 'hint', textContent: 'Start or stop from anywhere with Control+Option+L, or from OpenLang in the menu bar.' }),
   ];
