@@ -143,6 +143,7 @@ function engines(title, key, list) {
     const d = p.descriptor, on = d.id === active, r = readiness(p);
     const input = h('input', { type: 'radio', name: key, checked: on });
     input.addEventListener('change', () => pick(d.id));
+    input.addEventListener('keydown', e => e.key.startsWith('Arrow') && e.preventDefault());
     const choice = h('label', { className: 'row choice' }, input, words(d.name, d.summary),
       badge(r.tone, r.label), svg(CHECK));
     return on ? [choice, options(key, list, p)] : [choice];
