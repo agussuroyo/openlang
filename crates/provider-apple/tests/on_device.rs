@@ -36,14 +36,15 @@ fn run() {
         ),
         (
             "Eddy (Japanese (Japan))",
-            "ja-JP",
+            // Primary tags, as the language detector gives them.
+            "ja",
             "id",
             "今日は会議があります。よろしくお願いします。",
             "rapat",
         ),
         (
             "Damayanti",
-            "id-ID",
+            "id",
             "en",
             "Selamat pagi. Hari ini kita membahas anggaran proyek.",
             "budget",
