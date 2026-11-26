@@ -46,7 +46,7 @@ impl Registry {
 pub fn check_consent(p: &dyn Provider, options: &Options, allow_network: bool) -> Result<()> {
     if p.location(options) == Location::Network && !allow_network {
         return Err(Error::Config(format!(
-            "{} is online and online use is off",
+            "Allow online engines to use {}",
             p.descriptor().name
         )));
     }
