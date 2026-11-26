@@ -212,6 +212,7 @@ impl Session {
             clock,
             silent_for: Duration::ZERO,
             silent: false,
+            level: 0.0,
         };
         let input = graph.input();
         let pump = std::thread::spawn(move || pump.run(&input));
@@ -250,6 +251,17 @@ struct Pump {
     clock: Instant,
     silent_for: Duration,
     silent: bool,
+    level: f32,
+}
+
+/// Loudness of a chunk from 0 to 1: RMS on a 60 dB scale, so speech fills most of it.
+pub fn loudness(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let power = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+    let decibels = 10.0 * power.max(1e-12).log10();
+    ((decibels + 60.0) / 60.0).clamp(0.0, 1.0)
 }
 
 impl Pump {
@@ -317,6 +329,12 @@ impl Pump {
         if silent != self.silent {
             self.silent = silent;
             self.send(EventBody::Silent { origin, silent });
+        }
+        // Quiet after quiet sends nothing, so an idle session stays idle.
+        let level = loudness(&samples);
+        if level > 0.0 || self.level > 0.0 {
+            self.level = level;
+            self.send(EventBody::Level { origin, level });
         }
         let at = self.clock.elapsed().saturating_sub(length);
         input.emit(Packet::Audio(Arc::new(AudioChunk {

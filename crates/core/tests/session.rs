@@ -523,3 +523,13 @@ fn cancel_does_not_wait_for_queued_work() {
     assert!(t.elapsed() < Duration::from_secs(1));
     assert!(rx.try_iter().count() < 20);
 }
+
+#[test]
+fn loudness_maps_silence_to_zero_and_full_scale_to_one() {
+    use openlang_core::session::loudness;
+    assert_eq!(loudness(&[]), 0.0);
+    assert_eq!(loudness(&[0.0; 160]), 0.0);
+    assert_eq!(loudness(&[1.0, -1.0, 1.0, -1.0]), 1.0);
+    let speech = loudness(&[0.1, -0.1, 0.1, -0.1]);
+    assert!((speech - 2.0 / 3.0).abs() < 1e-3, "{speech}");
+}

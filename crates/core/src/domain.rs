@@ -147,6 +147,11 @@ pub enum EventBody {
         origin: Origin,
         silent: bool,
     },
+    /// How loud the source is right now, 0 (quiet) to 1, sent while there is sound.
+    Level {
+        origin: Origin,
+        level: f32,
+    },
     Overrun {
         origin: Origin,
         lost_samples: u64,
