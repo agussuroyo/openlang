@@ -63,6 +63,8 @@ Test notes:
   - `location()` is `OnDevice` only for loopback URLs.
   - Keys are refused over non-loopback `http`, and redirects are disabled.
   - Network providers also require `allow_network` (`registry::check_consent`).
+  - Each service is one row in `services.rs` (address, default model, extra chat JSON, speech API). Its speech and translate entries share one id, so one key in the keychain.
+  - Some models refuse `temperature` or think by default (slow captions); the row's `extra` turns thinking off or down.
 - `provider-whisper`: models are downloaded on demand with sha256 verification (`models.rs`).
 - `audio-coreaudio`: global Core Audio process tap + private aggregate device, excluding this process so spoken output can never be re-captured.
 
