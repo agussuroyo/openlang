@@ -153,7 +153,8 @@ function engines(title, key, list) {
 function options(key, list, p) {
   const d = p.descriptor;
   const online = p.location === 'network' && h('p', { className: 'sub bad', textContent: 'Online: speech or text is sent to this address.' });
-  const parts = [...d.fields.map(f => fieldFor(d, f, p)), online, fallback(key, list, d.id)].filter(Boolean);
+  const blocked = online && !data.settings.allow_network && h('p', { className: 'sub bad', textContent: 'Allow online engines is off, so this engine will not start.' });
+  const parts = [...d.fields.map(f => fieldFor(d, f, p)), online, blocked, fallback(key, list, d.id)].filter(Boolean);
   if (!parts.length) return null;
   return h('div', { className: 'options' }, ...parts);
 }
@@ -187,7 +188,7 @@ function engine() {
     engines('Speech recognition', 'stt', data.stt),
     engines('Translation', 'translators', data.translators),
     group('Privacy', [row('Allow online engines', 'When off, speech and text never leave this computer.',
-      toggle(s.allow_network, v => save({ allow_network: v })))]),
+      toggle(s.allow_network, v => save({ allow_network: v }, true)))]),
   ];
 }
 
