@@ -2,10 +2,10 @@
 import { S, spring, num, tune, clamp, register, wake } from '../shared/motion.js';
 
 const SIZE = {
-  idle: [160, 44], starting: [196, 28], stopping: [110, 28], listening: [128, 28],
-  panel: [310, 44], preparing: [250, 44], error: [344, 64],
+  idle: [120, 36], starting: [196, 28], stopping: [110, 28], listening: [128, 28],
+  panel: [310, 44], preparing: [250, 44], error: [344, 44],
 };
-const INSET = 24;   // room between the content and the island edge
+const INSET = 8;   // room between the content and the island edge, 4 on each side
 
 export function createIsland(island, onSize) {
   const w = spring('--island-w'), h = spring('--island-h'), radius = num('--island-radius');

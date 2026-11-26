@@ -7,22 +7,24 @@ body[data-v=middle]{align-items:center}
 body[data-v=end]{align-items:flex-end}
 
 /* Morph island: status and quick controls */
-.island{position:relative;flex:none;background:var(--object);box-shadow:var(--float);overflow:hidden;will-change:width,height,transform}
+/* Every content sits in one grid cell and is centred there, so no position depends on the animated width. */
+.island{display:grid;grid-template:100%/100%;place-items:center;flex:none;background:var(--object);box-shadow:var(--float);overflow:hidden;will-change:width,height,transform}
 .ic{
-  position:absolute;left:50%;top:50%;display:flex;align-items:center;gap:10px;white-space:nowrap;
-  opacity:0;filter:blur(6px);transform:translate(-50%,-50%) scale(.9);visibility:hidden;pointer-events:none;
+  grid-area:1/1;display:flex;align-items:center;gap:10px;white-space:nowrap;
+  opacity:0;filter:blur(6px);transform:scale(.9);visibility:hidden;pointer-events:none;
   transition:opacity .14s ease,filter .14s ease,transform .2s ease,visibility 0s .14s;
 }
 .ic.on{
-  opacity:1;filter:none;transform:translate(-50%,-50%) scale(1);visibility:visible;pointer-events:auto;
+  opacity:1;filter:none;transform:none;visibility:visible;pointer-events:auto;
   transition:opacity .35s ease .09s,filter .35s ease .09s,transform .6s cubic-bezier(.16,1,.3,1) .09s;
 }
 .num{font-variant-numeric:tabular-nums;font-weight:600}
 .ic b{font-weight:600;font-size:12px}
 .ic span{font-size:12px}
-.ic-idle b{padding:0 4px}
+.ic-idle{gap:6px;padding-left:8px}
+.ic-idle b{margin-right:2px}
 .soft{color:var(--text-2)}
-.ic-listening{min-width:104px;height:28px;gap:8px}
+.ic-listening{min-width:104px;height:28px;gap:8px;padding:0 8px}
 .ic-listening .num{margin-left:auto;padding-left:2px;color:var(--live)}
 /* Sound bars follow the real level. Only transform changes, so it stays cheap. */
 .bars{display:flex;flex:none;align-items:center;gap:2px;height:14px}
@@ -31,22 +33,22 @@ body[data-bars=off] .bars{display:none}
 .ic-panel{width:286px}
 .ic-preparing{width:224px}
 .ic-error{width:320px}
-.tx{flex:1;min-width:0;text-align:left}
+.tx{flex:1;min-width:0;text-align:left;line-height:1.3}
 .tx b,.tx span{display:block;overflow:hidden;text-overflow:ellipsis}
 .tx span{font-size:11px;color:var(--text-2)}
 .ic-error .tx b{color:var(--warn)}
-.ic-error .tx span{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
-.btn{flex:none;height:30px;padding:0 10px;border-radius:10px;background:var(--fill-3);font-size:12px;font-weight:500;transition:transform .16s var(--ease-out)}
+.btn{flex:none;height:28px;padding:0 12px;border-radius:var(--r-pill);background:var(--fill-3);font-size:12px;font-weight:500;transition:transform .16s var(--ease-out)}
 .btn.main{background:var(--inverse);color:var(--on-inverse)}
 .btn:active{transform:scale(.97)}
-.btn.icon{display:grid;place-items:center;width:30px;padding:0;border-radius:50%}
-.btn.icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.ring{width:24px;height:24px;flex:none;transform:rotate(-90deg)}
+.btn.icon{display:grid;place-items:center;width:28px;height:28px;padding:0;border-radius:50%}
+.btn.icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ring{width:24px;height:24px;flex:none;transform:rotate(-90deg)}
 .ring circle{fill:none;stroke-width:3.5}
 .ring .bg{stroke:var(--fill-3)}
 .ring .fg{stroke:var(--live);stroke-linecap:round;stroke-dasharray:81.7;stroke-dashoffset:81.7}
 .ic-preparing .num{color:var(--live)}
 
 @media (prefers-reduced-motion:reduce){
-  .ic,.ic.on{filter:none;transform:translate(-50%,-50%);transition:opacity .2s ease}
+  .ic,.ic.on{filter:none;transform:none;transition:opacity .2s ease}
   .bars i{transition:none}
 }

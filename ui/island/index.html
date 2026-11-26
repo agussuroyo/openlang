@@ -12,6 +12,7 @@
   <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.220 2h-.440a2 2 0 0 0-2 2v.180a2 2 0 0 1-1 1.730l-.430.250a2 2 0 0 1-2 0l-.150-.080a2 2 0 0 0-2.730.730l-.220.380a2 2 0 0 0 .730 2.730l.150.100a2 2 0 0 1 1 1.720v.510a2 2 0 0 1-1 1.740l-.150.090a2 2 0 0 0-.730 2.730l.220.380a2 2 0 0 0 2.730.730l.150-.080a2 2 0 0 1 2 0l.430.250a2 2 0 0 1 1 1.730V20a2 2 0 0 0 2 2h.440a2 2 0 0 0 2-2v-.180a2 2 0 0 1 1-1.730l.430-.250a2 2 0 0 1 2 0l.150.080a2 2 0 0 0 2.730-.730l.220-.390a2 2 0 0 0-.730-2.730l-.150-.080a2 2 0 0 1-1-1.740v-.500a2 2 0 0 1 1-1.740l.150-.090a2 2 0 0 0 .730-2.730l-.220-.380a2 2 0 0 0-2.730-.730l-.150.080a2 2 0 0 1-2 0l-.430-.250a2 2 0 0 1-1-1.730V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-start" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M8 5.500v13l10.500-6.500z"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect fill="currentColor" stroke="none" x="6.500" y="6.500" width="11" height="11" rx="2"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></symbol>
 </svg>
 <div class="island" id="island" role="status" aria-live="polite">
   <div class="ic ic-idle" data-s="idle">
@@ -37,7 +38,7 @@
   <div class="ic ic-error" data-s="error">
     <span class="tx"><b id="errTitle"></b><span id="errDetail"></span></span>
     <button class="btn main" id="errAct"></button>
-    <button class="btn" data-do="dismiss">Close</button>
+    <button class="btn icon" data-do="dismiss" aria-label="Close" title="Close"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
   </div>
 </div>
 <script type="module" src="main.js"></script>

@@ -45,8 +45,9 @@ function fail(error) {
   const e = explain(error), act = $('errAct');
   $('errTitle').textContent = e.title;
   $('errDetail').textContent = e.detail;
+  $('errDetail').title = e.detail;
   const mic = /microphone/i.test(e.detail);
-  act.textContent = e.code === 'permission' ? 'Open permission' : 'Settings';
+  act.textContent = e.code === 'permission' ? 'Allow' : 'Settings';
   act.onclick = () => e.code === 'permission'
     ? invoke('open_privacy', { pane: mic ? 'microphone' : 'system_audio' })
     : invoke('show_settings');
