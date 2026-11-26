@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use openlang_core::{
     Error, Result,
+    auto_language::to_prepare,
     domain::Origin,
     ports::{Descriptor, FieldKind, Job, Languages, Location, Provider, Readiness},
 };
@@ -51,7 +52,13 @@ async fn background<T: Send + 'static>(
         .unwrap_or_else(|e| Err(Error::Provider(e.to_string())))
 }
 
-fn info(e: &Engine, s: &Settings, p: &dyn Provider) -> Result<ProviderInfo> {
+/// `detector` finds the language for a recognizer that cannot.
+fn info(
+    e: &Engine,
+    s: &Settings,
+    p: &dyn Provider,
+    detector: Option<&dyn Provider>,
+) -> Result<ProviderInfo> {
     let d = p.descriptor().clone();
     let options = s.options_for(&d, e.secrets.as_ref())?;
     let stored_secrets = d
@@ -66,10 +73,12 @@ fn info(e: &Engine, s: &Settings, p: &dyn Provider) -> Result<ProviderInfo> {
         target: s.target_language.clone(),
         options,
     };
+    let mut languages = p.languages();
+    languages.can_detect |= detector.is_some();
     Ok(ProviderInfo {
         location,
-        languages: p.languages(),
-        readiness: p.readiness(&job),
+        languages,
+        readiness: to_prepare(p, detector, &job).readiness(&job),
         stored_secrets,
         descriptor: d,
     })
@@ -94,13 +103,13 @@ pub async fn snapshot(engine: State<'_, Shared>) -> Result<Snapshot> {
                 .registry
                 .stt
                 .iter()
-                .map(|p| info(&e, &s, p.as_ref()))
+                .map(|p| info(&e, &s, p.as_ref(), e.detector()))
                 .collect::<Result<_>>()?,
             translators: e
                 .registry
                 .translators
                 .iter()
-                .map(|p| info(&e, &s, p.as_ref()))
+                .map(|p| info(&e, &s, p.as_ref(), None))
                 .collect::<Result<_>>()?,
             status: e.status(),
             settings: s,
