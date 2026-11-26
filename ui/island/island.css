@@ -20,13 +20,13 @@ body[data-v=end]{align-items:flex-end}
 .num{font-variant-numeric:tabular-nums;font-weight:600}
 .ic b{font-weight:600;font-size:12px}
 .ic span{font-size:12px}
-.ic-idle{width:152px;justify-content:space-between}
+.ic-idle{min-width:152px;justify-content:space-between}
 .ic-idle button{height:30px;padding:0 4px;font-size:12px}
 .lead{display:flex;align-items:center;gap:8px}
 .lead span{color:var(--live);font-weight:600}
 .link{color:var(--text-2)}
 .soft{color:var(--text-2)}
-.ic-listening{width:104px;height:28px;justify-content:space-between}
+.ic-listening{min-width:104px;height:28px;justify-content:space-between}
 .ic-listening .num{color:var(--live)}
 .ic-panel{width:286px}
 .ic-preparing{width:224px}
