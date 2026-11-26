@@ -1,5 +1,6 @@
 //! Whisper running locally. Detects the language by itself. Models are downloaded on first use.
 
+mod detect;
 mod models;
 
 use std::{
@@ -37,8 +38,9 @@ pub fn register(registry: &mut Registry, models: PathBuf) {
                 default: models::ALL[0].id,
             }],
         },
-        models,
+        models: models.clone(),
     }));
+    registry.detector = Some(Arc::new(detect::WhisperDetector::new(models)));
 }
 
 struct Whisper {
