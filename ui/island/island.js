@@ -2,7 +2,7 @@
 import { S, spring, num, tune, clamp, register, wake } from '../shared/motion.js';
 
 const SIZE = {
-  idle: [176, 30], starting: [196, 28], stopping: [110, 28], listening: [128, 28],
+  idle: [200, 44], starting: [196, 28], stopping: [110, 28], listening: [128, 28],
   panel: [310, 44], preparing: [250, 44], error: [344, 64],
 };
 const INSET = 24;   // room between the content and the island edge
