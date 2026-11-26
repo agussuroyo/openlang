@@ -9,7 +9,12 @@ export function languageName(tag) {
   if (!tag) return 'Detect automatically';
   try { return names.of(tag) ?? tag; } catch { return tag; }
 }
-export const short = tag => tag ? tag.split('-')[0].toUpperCase() : 'AUTO';
+// Words that differ per system, so the UI reads right on macOS, Windows and Linux.
+export const isMac = /Mac/.test(navigator.userAgent);
+export const hotkeyName = isMac ? 'Control+Option+L' : 'Ctrl+Alt+L';
+export const trayName = isMac ? 'the menu bar' : 'the system tray';
+
+export const short =tag => tag ? tag.split('-')[0].toUpperCase() : 'AUTO';
 
 const titles = {
   permission: 'Permission needed',
