@@ -246,6 +246,8 @@ function display() {
         ['hide_listening', 'Hide while listening'],
         ['problems', 'Only when action is needed'],
       ], s.island_mode, v => save({ island_mode: v }))),
+      row('Pulse while listening', 'The live dot on the controls beats softly.',
+        toggle(s.pulse, v => save({ pulse: v }))),
       info('Start or stop', `Works in any app, or use OpenLang in ${trayName}.`,
         isMac ? keys('⌃', '⌥', 'L') : keys('Ctrl', 'Alt', 'L')),
     ]),

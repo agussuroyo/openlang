@@ -30,6 +30,7 @@ function applySettings(next) {
   const pair = `${short(next.source_language)} to ${short(next.target_language)}`;
   for (const id of ['idlePair', 'pair', 'panelPair']) $(id).textContent = pair;
   island.refit();
+  document.body.dataset.pulse = next.pulse ? 'on' : 'off';
   visibility();
 }
 

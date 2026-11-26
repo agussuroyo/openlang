@@ -30,6 +30,8 @@ pub struct Settings {
     pub caption_size: (f64, f64),
     pub island_place: Place,
     pub island_mode: IslandMode,
+    /// A pulsing dot on the controls while listening.
+    pub pulse: bool,
 }
 
 /// How subtitles look. The caption window turns each field into CSS.
@@ -112,6 +114,7 @@ impl Default for Settings {
             // A corner, because the middle of the screen is where people look.
             island_place: Place::preset(Edge::End, Edge::Start),
             island_mode: IslandMode::Always,
+            pulse: true,
         }
     }
 }
@@ -164,6 +167,7 @@ impl Settings {
                 caption_size: d.caption_size,
                 island_place: d.island_place,
                 island_mode: d.island_mode,
+                pulse: d.pulse,
                 ..s.clone()
             }
         };
@@ -293,6 +297,10 @@ mod tests {
                 text_size: 40,
                 ..SubtitleStyle::default()
             },
+            ..a.clone()
+        }));
+        assert!(!a.pipeline_differs(&Settings {
+            pulse: false,
             ..a.clone()
         }));
         assert!(a.pipeline_differs(&Settings {

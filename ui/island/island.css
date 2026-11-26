@@ -22,8 +22,13 @@ body[data-v=end]{align-items:flex-end}
 .ic span{font-size:12px}
 .ic-idle b{padding:0 4px}
 .soft{color:var(--text-2)}
-.ic-listening{min-width:104px;height:28px;justify-content:space-between}
-.ic-listening .num{color:var(--live)}
+.ic-listening{min-width:104px;height:28px;gap:8px}
+.ic-listening .num{margin-left:auto;padding-left:2px;color:var(--live)}
+/* Live dot. Its pulse runs only while shown, and only on transform and opacity. */
+.dot{position:relative;flex:none;width:7px;height:7px;border-radius:50%;background:var(--live)}
+.ic-listening.on .dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--live);animation:pulse 1.8s cubic-bezier(.23,1,.32,1) infinite}
+@keyframes pulse{from{transform:scale(1);opacity:.7}to{transform:scale(2.8);opacity:0}}
+body[data-pulse=off] .ic-listening.on .dot::after{display:none}
 .ic-panel{width:286px}
 .ic-preparing{width:224px}
 .ic-error{width:320px}
@@ -42,4 +47,7 @@ body[data-v=end]{align-items:flex-end}
 .ring .fg{stroke:var(--live);stroke-linecap:round;stroke-dasharray:81.7;stroke-dashoffset:81.7}
 .ic-preparing .num{color:var(--live)}
 
-@media (prefers-reduced-motion:reduce){.ic,.ic.on{filter:none;transform:translate(-50%,-50%);transition:opacity .2s ease}}
+@media (prefers-reduced-motion:reduce){
+  .ic,.ic.on{filter:none;transform:translate(-50%,-50%);transition:opacity .2s ease}
+  .ic-listening.on .dot::after{display:none}
+}
