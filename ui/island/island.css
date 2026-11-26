@@ -7,7 +7,7 @@ body[data-v=middle]{align-items:center}
 body[data-v=end]{align-items:flex-end}
 
 /* Morph island: status and quick controls */
-.island{position:relative;flex:none;background:var(--object);overflow:hidden;will-change:width,height,transform}
+.island{position:relative;flex:none;background:var(--object);box-shadow:var(--float);overflow:hidden;will-change:width,height,transform}
 .ic{
   position:absolute;left:50%;top:50%;display:flex;align-items:center;gap:10px;white-space:nowrap;
   opacity:0;filter:blur(6px);transform:translate(-50%,-50%) scale(.9);visibility:hidden;pointer-events:none;

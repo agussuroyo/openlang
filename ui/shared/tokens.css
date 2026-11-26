@@ -7,6 +7,9 @@
   --text:#fff; --text-2:rgba(255,255,255,.78); --muted:#a3a3a3;
   --inverse:#fff; --on-inverse:#000;
   --live:#3ce085; --warn:#ffb340;
+  /* Depth: a raised card, and a window that floats over other apps. Small, so it stays sharp on white. */
+  --raise:inset 0 1px rgba(255,255,255,.05),0 0 0 1px rgba(255,255,255,.04);
+  --float:0 0 0 1px rgba(255,255,255,.06),0 2px 8px rgba(0,0,0,.35);
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   --r-row:12px; --r-sheet:24px; --r-pill:999px;
   --island-w:380 24; --island-h:300 22; --island-radius:32;
@@ -22,6 +25,8 @@
     --text:#17181a; --text-2:#3c3b37; --muted:#62615c;
     --inverse:#0e0f11; --on-inverse:#f4f3f1;
     --live:#136c34; --warn:#8f4a05;
+    --raise:0 0 0 1px rgba(23,24,26,.06),0 1px 3px rgba(23,24,26,.06);
+    --float:0 0 0 1px rgba(23,24,26,.08),0 2px 8px rgba(23,24,26,.16);
     color-scheme:light;
   }
 }
