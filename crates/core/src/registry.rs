@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::{
     Error, Result,
-    ports::{AudioSource, Location, Options, Provider, SpeechToText, TransformFactory, Translator},
+    ports::{
+        AudioSource, LanguageDetector, Location, Options, Provider, SpeechToText, TransformFactory,
+        Translator,
+    },
 };
 
 /// Everything that was plugged in. An adapter crate adds itself with one `register` function.
@@ -12,6 +15,7 @@ pub struct Registry {
     pub stt: Vec<Arc<dyn SpeechToText>>,
     pub translators: Vec<Arc<dyn Translator>>,
     pub resampler: Option<Arc<dyn TransformFactory>>,
+    pub detector: Option<Arc<dyn LanguageDetector>>,
 }
 
 fn find<'a, T: ?Sized>(

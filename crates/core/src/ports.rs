@@ -131,6 +131,25 @@ pub trait SttSession: Send {
     fn finish(&mut self) -> Result<()>;
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Detected {
+    /// Primary tag, such as `id`.
+    pub language: String,
+    /// From 0 to 1.
+    pub confidence: f32,
+}
+
+/// Finds the spoken language for recognizers that cannot.
+pub trait LanguageDetector: Provider {
+    /// `allowed` are primary tags; any other language is never answered.
+    fn open(&self, allowed: Vec<String>) -> Result<Box<dyn DetectorSession>>;
+}
+
+pub trait DetectorSession: Send {
+    /// 16 kHz mono. `None` when nobody speaks.
+    fn detect(&mut self, samples: &[f32]) -> Result<Option<Detected>>;
+}
+
 pub trait Translator: Provider {
     fn open(&self, job: &Job) -> Result<Box<dyn TranslatorSession>>;
 }
