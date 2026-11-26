@@ -82,7 +82,7 @@ Test notes:
 ## UI (`ui/`)
 
 - No bundler and no dependencies. ES modules use `window.__TAURI__` (`withGlobalTauri`).
-- `shared/tokens.css` is the single source for colours (light and dark), radii and spring values ("stiffness damping").
+- `shared/tokens.css` is the single source for colours (light and dark), radii, depth, easing, the subtitle outline and spring values ("stiffness damping").
 - `shared/motion.js` is a spring engine with one rAF loop that sleeps when everything is at rest. Keep it sleeping when idle.
 - Component motion follows https://designbookmark.com/motion. Morph island and Bottom bar keep their original spring values.
 

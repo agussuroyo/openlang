@@ -36,7 +36,7 @@ body[data-bars=off] .bars{display:none}
 .tx span{font-size:11px;color:var(--text-2)}
 .ic-error .tx b{color:var(--warn)}
 .ic-error .tx span{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
-.btn{flex:none;height:30px;padding:0 10px;border-radius:10px;background:var(--fill-3);font-size:12px;font-weight:500;transition:transform .16s cubic-bezier(.23,1,.32,1)}
+.btn{flex:none;height:30px;padding:0 10px;border-radius:10px;background:var(--fill-3);font-size:12px;font-weight:500;transition:transform .16s var(--ease-out)}
 .btn.main{background:var(--inverse);color:var(--on-inverse)}
 .btn:active{transform:scale(.97)}
 .btn.icon{display:grid;place-items:center;width:30px;padding:0;border-radius:50%}

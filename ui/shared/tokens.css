@@ -10,6 +10,12 @@
   /* Depth: a raised card, and a window that floats over other apps. Small, so it stays sharp on white. */
   --raise:inset 0 1px rgba(255,255,255,.05),0 0 0 1px rgba(255,255,255,.04);
   --float:0 0 0 1px rgba(255,255,255,.06),0 2px 8px rgba(0,0,0,.35);
+  --ease-out:cubic-bezier(.23,1,.32,1);
+  /* Subtitles: white text with a thin sharp outline, so it reads over any video.
+     A wide soft blur looks like a grey smudge on white backgrounds. */
+  --screen:#202326;
+  --sub-edge:.06em; --sub-ink:rgba(0,0,0,.9);
+  --sub-shadow:calc(var(--sub-edge) * -1) calc(var(--sub-edge) * -1) 0 var(--sub-ink),var(--sub-edge) calc(var(--sub-edge) * -1) 0 var(--sub-ink),calc(var(--sub-edge) * -1) var(--sub-edge) 0 var(--sub-ink),var(--sub-edge) var(--sub-edge) 0 var(--sub-ink),0 .05em .12em rgba(0,0,0,.5);
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   --r-row:12px; --r-sheet:24px; --r-pill:999px;
   --island-w:380 24; --island-h:300 22; --island-radius:32;

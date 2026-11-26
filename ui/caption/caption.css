@@ -1,9 +1,4 @@
-/* Movie subtitles: no panel, white text with a thin sharp outline so it reads over any video.
-   A wide soft blur looks like a grey smudge on white backgrounds. */
-:root{
-  --sub-edge:.06em; --sub-ink:rgba(0,0,0,.9);
-  --sub-shadow:calc(var(--sub-edge) * -1) calc(var(--sub-edge) * -1) 0 var(--sub-ink),var(--sub-edge) calc(var(--sub-edge) * -1) 0 var(--sub-ink),calc(var(--sub-edge) * -1) var(--sub-edge) 0 var(--sub-ink),var(--sub-edge) var(--sub-edge) 0 var(--sub-ink),0 .05em .12em rgba(0,0,0,.5);
-}
+/* Movie subtitles: no panel. The outline comes from --sub-shadow in tokens.css. */
 html,body{background:transparent}
 body{padding:6px;display:flex;font-family:var(--sub-font,var(--font))}
 body.dragging .subtitle{cursor:grabbing}
