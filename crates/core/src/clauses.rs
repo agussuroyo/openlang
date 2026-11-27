@@ -19,8 +19,9 @@ pub struct Clauses {
 }
 
 impl Clauses {
-    /// Translates `text` of `segment`, reusing every clause already translated by an earlier
-    /// call. Translating happens outside the lock, so callers never wait for each other.
+    /// Translates `text` of `segment`, reusing every run of clauses already translated by an
+    /// earlier call, the longest first. Translating happens outside the lock, so callers never
+    /// wait for each other.
     ///
     /// Each call to a translator costs a fixed overhead. Unfinished speech still pays it per
     /// missing clause, so the next partial can reuse each one; a final has no next partial, so
@@ -38,13 +39,23 @@ impl Clauses {
             Known(String),
             Ask(&'a str, bool),
         }
+        let clauses = split(text);
         let mut plan = Vec::new();
-        for clause in split(text) {
-            match (self.get(segment, clause), plan.last_mut()) {
-                (Some(known), _) => plan.push(Part::Known(known)),
-                (None, Some(Part::Ask(asked, false))) => *asked = span(text, asked, clause),
-                (None, _) => plan.push(Part::Ask(clause, !is_final)),
+        let mut i = 0;
+        while i < clauses.len() {
+            let known = (i..clauses.len()).rev().find_map(|j| {
+                let run = span(text, clauses[i], clauses[j]);
+                self.get(segment, run).map(|known| (j, known))
+            });
+            match (known, plan.last_mut()) {
+                (Some((j, known)), _) => {
+                    plan.push(Part::Known(known));
+                    i = j;
+                }
+                (None, Some(Part::Ask(asked, false))) => *asked = span(text, asked, clauses[i]),
+                (None, _) => plan.push(Part::Ask(clauses[i], !is_final)),
             }
+            i += 1;
         }
         let parts = plan
             .into_iter()
@@ -65,7 +76,7 @@ impl Clauses {
     fn get(&self, segment: SegmentId, clause: &str) -> Option<String> {
         let segments = lock(&self.segments);
         let (_, known) = segments.iter().find(|(id, _)| *id == segment)?;
-        known.get(clause).cloned()
+        known.get(&key(clause)).cloned()
     }
 
     fn put(&self, segment: SegmentId, clause: &str, translated: &str) {
@@ -77,7 +88,7 @@ impl Clauses {
             segments.push_back((segment, HashMap::new()));
         }
         if let Some((_, known)) = segments.iter_mut().find(|(id, _)| *id == segment) {
-            known.insert(clause.to_owned(), translated.to_owned());
+            known.insert(key(clause), translated.to_owned());
         }
     }
 }
@@ -102,6 +113,20 @@ fn split(text: &str) -> Vec<&str> {
     clauses.push(text[from..].trim());
     clauses.retain(|c| !c.is_empty());
     clauses
+}
+
+/// Unfinished speech often comes without the punctuation and capitals its final gets, so a clause
+/// is known by its words alone.
+fn key(clause: &str) -> String {
+    let words: String = clause
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    words
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// The part of `text` from the start of `first` to the end of `last`, both slices of it.
@@ -190,8 +215,39 @@ mod tests {
         let out = c
             .translate(id, "Zero, one, two, three, four,  five.", "id", true, same)
             .unwrap();
-        assert_eq!(out, "Zero, one, two, three, four,  five.");
-        assert_eq!(*asked.borrow(), ["Zero,", "three, four,  five."]);
+        // "three" was heard without its comma, and is the same clause.
+        assert_eq!(out, "Zero, one, two, three four,  five.");
+        assert_eq!(*asked.borrow(), ["Zero,", "four,  five."]);
+    }
+
+    #[test]
+    fn a_final_reuses_unpunctuated_partials_that_span_its_clauses() {
+        let asked = RefCell::new(Vec::new());
+        let same = |s: &str| {
+            asked.borrow_mut().push(s.to_owned());
+            Ok(s.to_owned())
+        };
+        let c = Clauses::default();
+        let id = SegmentId::new();
+        for partial in [
+            "we chose the park because it",
+            "we chose the park because it was sunny",
+            "we chose the park because it was sunny so",
+        ] {
+            c.translate(id, partial, "id", false, same).unwrap();
+        }
+        asked.borrow_mut().clear();
+        let out = c
+            .translate(
+                id,
+                "We chose the park, because it was sunny. So nice.",
+                "id",
+                true,
+                same,
+            )
+            .unwrap();
+        assert_eq!(out, "we chose the park because it was sunny So nice.");
+        assert_eq!(*asked.borrow(), ["So nice."]);
     }
 
     #[test]
