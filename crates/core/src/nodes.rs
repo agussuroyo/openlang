@@ -411,10 +411,16 @@ impl PartialWorker {
     }
 }
 
-/// Translates clause by clause (see `Clauses`): fast, at some cost to the wording of long
-/// sentences.
+/// A translator that answers this fast translates a final whole, for the best wording. A slower
+/// one reuses the clauses of its partials instead (see `Clauses`).
+const FAST_CALL: Duration = Duration::from_millis(200);
+
+/// Translates partials clause by clause, and finals whole or from clauses by the translator's
+/// speed.
 pub struct TranslateNode {
     finals: TranslatorChain,
+    /// How long the last final translation call took.
+    last_call: Duration,
     clauses: Arc<Clauses>,
     partials: Option<PartialWorker>,
     interval: Duration,
@@ -431,6 +437,7 @@ impl TranslateNode {
     ) -> Self {
         Self {
             finals: TranslatorChain::new(providers, target),
+            last_call: Duration::MAX,
             clauses: Arc::default(),
             partials: None,
             interval,
@@ -482,14 +489,24 @@ impl Node for TranslateNode {
         let out = started(&self.out)?;
         partials.final_started();
         let target = self.finals.target.clone();
-        let finals = &mut self.finals;
-        let translate = |clause: &str| finals.translate(clause, &t.language, Some(out));
-        let text = self
-            .clauses
-            .translate(t.segment.id, &t.text, &target, true, translate)
-            // Already reported. The original text closes the segment, so no stale partial
-            // translation stays on screen.
-            .unwrap_or_else(|_| t.text.clone());
+        let whole = self.last_call < FAST_CALL;
+        let (finals, last_call) = (&mut self.finals, &mut self.last_call);
+        let mut translate = |text: &str| {
+            let began = Instant::now();
+            let translated = finals.translate(text, &t.language, Some(out));
+            *last_call = began.elapsed();
+            translated
+        };
+        let translated = if whole {
+            translate(&t.text)
+        } else {
+            let id = t.segment.id;
+            self.clauses
+                .translate(id, &t.text, &target, true, translate)
+        };
+        // Already reported. The original text closes the segment, so no stale partial
+        // translation stays on screen.
+        let text = translated.unwrap_or_else(|_| t.text.clone());
         partials.final_ended(t.segment.id);
         out.emit(translation(&t, &target, text));
         Ok(())

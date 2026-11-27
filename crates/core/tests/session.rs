@@ -783,6 +783,54 @@ fn a_late_partial_never_replaces_its_final() {
     graph.finish();
 }
 
+/// Answers at once, and remembers every text it was asked.
+struct Recording {
+    base: Base,
+    asked: Arc<Mutex<Vec<String>>>,
+}
+provider!(Recording);
+impl Translator for Recording {
+    fn open(&self, _: &Job) -> Result<Box<dyn TranslatorSession>> {
+        Ok(Box::new(RecordingSession(self.asked.clone())))
+    }
+}
+struct RecordingSession(Arc<Mutex<Vec<String>>>);
+impl TranslatorSession for RecordingSession {
+    fn translate(&mut self, text: &str, _: &str) -> Result<String> {
+        self.0.lock().unwrap().push(text.to_owned());
+        Ok(text.to_owned())
+    }
+}
+
+#[test]
+fn a_fast_translator_translates_a_final_whole_once_it_is_known_to_be_fast() {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let fast: Arc<dyn Translator> = Arc::new(Recording {
+        base: Base {
+            d: descriptor("fast"),
+            location: Location::OnDevice,
+        },
+        asked: asked.clone(),
+    });
+    let mut g = GraphBuilder::default();
+    let node = TranslateNode::new(vec![(fast, job())], "id".into(), Duration::ZERO);
+    g.root(Box::new(node)).unwrap();
+    let graph = g.start(Arc::new(|_, _| {})).unwrap();
+    let say = |partial: &str, end: &str| {
+        let id = SegmentId::new();
+        graph.input().emit(transcript_of(id, partial, false));
+        std::thread::sleep(Duration::from_millis(50));
+        asked.lock().unwrap().clear();
+        graph.input().emit(transcript_of(id, end, true));
+        std::thread::sleep(Duration::from_millis(50));
+        asked.lock().unwrap().clone()
+    };
+    // Its speed is not known yet: the final reuses the clause its partial translated.
+    assert_eq!(say("Hello, th", "Hello, there"), ["there"]);
+    assert_eq!(say("Bye, no", "Bye, now"), ["Bye, now"]);
+    graph.finish();
+}
+
 #[test]
 fn a_failed_final_translation_closes_with_the_original_text() {
     let rec = Arc::new(Recorder::default());
