@@ -332,13 +332,16 @@ fn translation(t: &Transcript, language: &str, text: String) -> Packet {
 #[derive(Default)]
 struct Delivery {
     ended: VecDeque<SegmentId>,
+    /// Finals emitted so far.
+    ended_total: usize,
     closed: bool,
     /// Finals being translated. Translation services answer one request at a time, so the
     /// worker waits for these.
     finals: usize,
 }
 
-/// Ended segments remembered. A partial translation is never this many segments late.
+/// Ended segments remembered. A partial that took longer than this many finals is dropped, since
+/// its own segment may be forgotten by then.
 const ENDED_KEPT: usize = 16;
 
 /// Translates unfinished speech on its own thread with its own translators, so a final never
@@ -358,11 +361,10 @@ impl PartialWorker {
             let target = chain.target.clone();
             while let Ok(mut t) = queue.recv() {
                 let (state, finals_done) = &*shared;
-                drop(
-                    finals_done
-                        .wait_while(lock(state), |d| d.finals > 0 && !d.closed)
-                        .unwrap_or_else(PoisonError::into_inner),
-                );
+                let began_after = finals_done
+                    .wait_while(lock(state), |d| d.finals > 0 && !d.closed)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .ended_total;
                 while let Ok(newer) = queue.try_recv() {
                     t = newer;
                 }
@@ -376,7 +378,8 @@ impl PartialWorker {
                 if delivery.closed {
                     return;
                 }
-                if !delivery.ended.contains(&t.segment.id) {
+                let late = delivery.ended_total - began_after >= ENDED_KEPT;
+                if !late && !delivery.ended.contains(&t.segment.id) {
                     out.emit(translation(&t, &target, text));
                 }
             }
@@ -397,6 +400,7 @@ impl PartialWorker {
     fn final_ended(&self, segment: SegmentId) {
         let mut delivery = lock(&self.delivery.0);
         delivery.finals -= 1;
+        delivery.ended_total += 1;
         delivery.ended.push_back(segment);
         if delivery.ended.len() > ENDED_KEPT {
             delivery.ended.pop_front();
