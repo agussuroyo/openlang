@@ -93,18 +93,20 @@ impl Clauses {
     }
 }
 
-/// Clauses end at punctuation followed by a space. The last one may still be growing.
+/// Clauses end at punctuation followed by a space, or at full-width punctuation, which Chinese
+/// and Japanese write without one. The last clause may still be growing.
 fn split(text: &str) -> Vec<&str> {
     let mut clauses = Vec::new();
     let mut from = 0;
     let mut chars = text.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         let next_is_space = chars.peek().is_some_and(|(_, n)| n.is_whitespace());
-        if matches!(
-            c,
-            '.' | ',' | '?' | '!' | ';' | ':' | '。' | '、' | '？' | '！'
-        ) && next_is_space
-        {
+        let ends = match c {
+            '.' | ',' | '?' | '!' | ';' | ':' => next_is_space,
+            '。' | '、' | '？' | '！' | '，' | '；' | '：' => true,
+            _ => false,
+        };
+        if ends {
             let end = i + c.len_utf8();
             clauses.push(text[from..end].trim());
             from = end;
@@ -157,6 +159,11 @@ mod tests {
         );
         assert_eq!(split("3.5 million, so"), ["3.5 million,", "so"]);
         assert_eq!(split("Done."), ["Done."]);
+        assert_eq!(
+            split("今日は会議があります。プロジェクトの予算について"),
+            ["今日は会議があります。", "プロジェクトの予算について"]
+        );
+        assert_eq!(split("你好，我们开始吧"), ["你好，", "我们开始吧"]);
         assert!(split("  ").is_empty());
     }
 
