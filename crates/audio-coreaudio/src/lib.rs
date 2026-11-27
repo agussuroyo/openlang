@@ -69,12 +69,20 @@ fn output_address() -> ca::PropAddr {
     ca::PropSelector::HW_DEFAULT_OUTPUT_DEVICE.global_addr()
 }
 
+/// The tap format is read once at open; a new rate (lossless switch, HDMI renegotiation) reopens.
+/// A new default output reopens too, which listens on the new device.
+fn rate_address() -> ca::PropAddr {
+    ca::PropSelector::DEVICE_NOMINAL_SAMPLE_RATE.global_addr()
+}
+
 /// Fields drop in order: stop the device, remove it, destroy the tap, then free the callback data.
 struct Running {
     /// The started aggregate device; cidre does not export its type.
     started: Option<Box<dyn Any>>,
     _tap: ca::TapGuard,
     _writer: Box<AudioWriter>,
+    /// The output device the aggregate is built on.
+    output: ca::Device,
     invalidator: *mut Invalidator,
 }
 
@@ -90,7 +98,10 @@ impl Drop for Running {
             on_output_changed,
             self.invalidator,
         );
-        if removed.is_ok() {
+        let rate_removed =
+            self.output
+                .remove_prop_listener(&rate_address(), on_output_changed, self.invalidator);
+        if removed.is_ok() && rate_removed.is_ok() {
             // SAFETY: created by Box::into_raw and no longer reachable by Core Audio.
             drop(unsafe { Box::from_raw(self.invalidator) });
         }
@@ -166,15 +177,21 @@ impl AudioSource for SystemAudio {
             .create_io_proc_id(on_audio, Some(writer.as_mut()))
             .map_err(failed("audio callback"))?;
         let invalidator = Box::into_raw(Box::new(invalidator));
-        ca::System::OBJ
-            .add_prop_listener(&output_address(), on_output_changed, invalidator)
-            .map_err(failed("output listener"))?;
         let mut running = Running {
             started: None,
             _tap: tap,
             _writer: writer,
+            output,
             invalidator,
         };
+        // On failure, drop removes what was added; the invalidator is leaked, not freed, unless
+        // both listeners are removed.
+        ca::System::OBJ
+            .add_prop_listener(&output_address(), on_output_changed, invalidator)
+            .map_err(failed("output listener"))?;
+        output
+            .add_prop_listener(&rate_address(), on_output_changed, invalidator)
+            .map_err(failed("sample rate listener"))?;
         let started = ca::device_start(device, Some(proc_id)).map_err(failed("start capture"))?;
         running.started = Some(Box::new(started));
         Ok((reader, Box::new(running)))
