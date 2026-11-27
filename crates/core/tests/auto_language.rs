@@ -53,6 +53,8 @@ struct Stt {
     opened: Arc<Mutex<Vec<(String, usize)>>>,
     /// How long `prepare` takes; `None` means nothing to download.
     download: Option<Duration>,
+    /// How long a session takes to say its last words.
+    last_words: Duration,
 }
 impl Provider for Stt {
     fn descriptor(&self) -> &Descriptor {
@@ -83,6 +85,7 @@ impl SpeechToText for Stt {
         let mut opened = self.opened.lock().unwrap();
         opened.push((job.source.clone().unwrap(), 0));
         Ok(Box::new(Session {
+            last_words: self.last_words,
             index: opened.len() - 1,
             opened: self.opened.clone(),
             out,
@@ -90,6 +93,7 @@ impl SpeechToText for Stt {
     }
 }
 struct Session {
+    last_words: Duration,
     index: usize,
     opened: Arc<Mutex<Vec<(String, usize)>>>,
     out: SttOutput,
@@ -106,7 +110,16 @@ impl SttSession for Session {
         }));
         Ok(())
     }
+    /// Says its last words a little later, as a real recognizer does.
     fn finish(&mut self) -> Result<()> {
+        thread::sleep(self.last_words);
+        (self.out)(Ok(SttUpdate {
+            text: "last".into(),
+            language: None,
+            start: Duration::ZERO,
+            end: Duration::from_secs(1),
+            is_final: true,
+        }));
         Ok(())
     }
 }
@@ -149,10 +162,14 @@ struct Run {
 }
 
 fn run(answers: Vec<(&'static str, f32)>) -> Run {
-    run_with(answers, None)
+    run_with(answers, None, Duration::from_millis(50))
 }
 
-fn run_with(answers: Vec<(&'static str, f32)>, download: Option<Duration>) -> Run {
+fn run_with(
+    answers: Vec<(&'static str, f32)>,
+    download: Option<Duration>,
+    last_words: Duration,
+) -> Run {
     let opened = Arc::new(Mutex::default());
     let heard = Arc::new(Mutex::new(Vec::new()));
     let detections = Arc::new(Mutex::new(0));
@@ -163,6 +180,7 @@ fn run_with(answers: Vec<(&'static str, f32)>, download: Option<Duration>) -> Ru
         descriptor: descriptor(),
         opened: opened.clone(),
         download,
+        last_words,
     });
     let detector = Detector {
         descriptor: descriptor(),
@@ -209,6 +227,7 @@ fn only_auto_on_a_recognizer_that_cannot_detect_needs_the_detector() {
         descriptor: descriptor(),
         opened: Arc::default(),
         download: None,
+        last_words: Duration::ZERO,
     };
     assert!(needs_detector(&stt, &Job::default()));
     let chosen = Job {
@@ -244,11 +263,12 @@ fn switches_only_after_two_sure_answers_in_a_row() {
     // Detections end on seconds 3, 8, 9, 14 and 15: every 5 s once open, every second while
     // a switch is pending.
     r.speak(17);
+    r.auto.finish().unwrap();
     let opened = r.opened();
     let languages: Vec<&str> = opened.iter().map(|(l, _)| l.as_str()).collect();
     assert_eq!(languages, ["id", "en"]);
-    // The "en" heard on second 8 lost to "id", so the held seconds 8 and 9 went to "id".
-    assert_eq!(opened[0].1, RATE * 14);
+    // "id" heard everything until "en" took over on second 16.
+    assert_eq!(opened[0].1, RATE * 16);
     let heard = r.heard.lock().unwrap();
     let last = heard.last().unwrap();
     assert_eq!(last.language.as_deref(), Some("en"));
@@ -260,17 +280,55 @@ fn switches_only_after_two_sure_answers_in_a_row() {
 fn a_new_language_is_heard_from_the_first_window_that_voted_for_it() {
     let mut r = run(vec![("id", 0.9), ("en", 0.9), ("en", 0.9)]);
     r.speak(11);
+    r.auto.finish().unwrap();
     let opened = r.opened();
-    // The window of seconds 5 to 7 voted "en" first. "id" heard up to second 7, then the
-    // audio was held until the switch; "en" got seconds 5 to 10.
-    assert_eq!(opened, [("id".into(), RATE * 8), ("en".into(), RATE * 6)]);
+    // The window of seconds 5 to 7 voted "en" first. "id" kept hearing until the switch on
+    // second 10, so no audio waited; "en" heard seconds 5 to 10 again.
+    assert_eq!(opened, [("id".into(), RATE * 10), ("en".into(), RATE * 6)]);
     let heard = r.heard.lock().unwrap();
     assert_eq!(heard.last().unwrap().start, Duration::from_secs(5));
 }
 
 #[test]
+fn a_replaced_recognizer_says_its_last_words_before_the_new_one_speaks() {
+    let mut r = run(vec![("id", 0.9), ("en", 0.9), ("en", 0.9)]);
+    r.speak(11);
+    r.auto.finish().unwrap();
+    let heard = r.heard.lock().unwrap();
+    let languages: Vec<&str> = heard.iter().filter_map(|u| u.language.as_deref()).collect();
+    let first = languages.iter().position(|l| *l == "en").unwrap();
+    assert!(
+        languages[first..].iter().all(|l| *l == "en"),
+        "{languages:?}"
+    );
+    assert_eq!(heard[first - 1].text, "last");
+}
+
+#[test]
+fn a_recognizer_that_never_finishes_cannot_hold_up_the_new_language() {
+    let mut r = run_with(
+        vec![("id", 0.9), ("en", 0.9), ("en", 0.9)],
+        None,
+        Duration::from_secs(60),
+    );
+    r.speak(11);
+    // The new recognizer's words wait for the old one's last words at most 3 s.
+    thread::sleep(Duration::from_millis(3500));
+    let heard = r.heard.lock().unwrap();
+    assert!(heard.iter().any(|u| u.language.as_deref() == Some("en")));
+    assert!(
+        heard.iter().all(|u| u.text != "last"),
+        "late words were dropped"
+    );
+}
+
+#[test]
 fn a_slow_download_never_holds_up_the_audio() {
-    let mut r = run_with(vec![("id", 0.9)], Some(Duration::from_millis(500)));
+    let mut r = run_with(
+        vec![("id", 0.9)],
+        Some(Duration::from_millis(500)),
+        Duration::from_millis(50),
+    );
     r.speak(8);
     assert!(r.slowest < Duration::from_millis(100), "{:?}", r.slowest);
     assert!(r.opened().is_empty());

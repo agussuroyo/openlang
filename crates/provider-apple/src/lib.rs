@@ -1,7 +1,14 @@
 //! Apple on-device speech recognition and translation. Free, offline, nothing bundled.
 #![cfg(target_os = "macos")]
 
-use std::{sync::Arc, thread::JoinHandle};
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicUsize, Ordering::SeqCst},
+    },
+    thread::JoinHandle,
+};
 
 use openlang_apple_bridge::{Status, speech, translation};
 use openlang_core::{Error, Result, domain::AudioChunk, ports::*, registry::Registry};
@@ -79,22 +86,81 @@ impl SttSession for Speech {
     }
 }
 
-pub struct AppleTranslator(Descriptor);
+pub struct AppleTranslator {
+    descriptor: Descriptor,
+    offers: Arc<Offers>,
+}
 
 impl Default for AppleTranslator {
     fn default() -> Self {
-        Self(Descriptor {
-            id: "apple-translate",
-            name: "Apple Translate",
-            summary: "On this Mac, free, works offline.",
-            fields: vec![],
-        })
+        Self {
+            descriptor: Descriptor {
+                id: "apple-translate",
+                name: "Apple Translate",
+                summary: "On this Mac, free, works offline.",
+                fields: vec![],
+            },
+            offers: Arc::default(),
+        }
+    }
+}
+
+/// Whether the pair can be translated now, at whichever speed.
+fn usable(source: &str, target: &str) -> Readiness {
+    match translation::status(source, target) {
+        Status::Ready => Readiness::Ready,
+        Status::Downloadable => Readiness::NeedsAction {
+            message: "Download this language in System Settings > General > Language & Region > Translation Languages.".into(),
+        },
+        Status::Unsupported => unsupported(format!("Apple cannot translate {source} to {target}")),
+    }
+}
+
+/// A language pack is missing that would make the pair usable, or fast: the fast pack turns half
+/// a second per sentence into tens of milliseconds.
+fn missing(source: &str, target: &str) -> bool {
+    translation::status(source, target) == Status::Downloadable
+        || translation::fast_status(source, target) == Status::Downloadable
+}
+
+/// Language pack downloads offered to the user, at most once per pair while the app runs: one
+/// answer is enough.
+#[derive(Default)]
+struct Offers {
+    made: Mutex<HashSet<(String, String)>>,
+    /// Counts finished offers, so open sessions reopen with what was installed.
+    finished: AtomicUsize,
+}
+
+impl Offers {
+    fn made(&self) -> std::sync::MutexGuard<'_, HashSet<(String, String)>> {
+        self.made.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Shows the system's download sheet, unless this pair was offered already. Saying no is
+    /// fine: translation then runs at the speed of what is installed.
+    fn offer(&self, source: &str, target: &str) {
+        if self.made().insert((source.to_owned(), target.to_owned())) {
+            let _ = translation::install(source, target);
+            self.finished.fetch_add(1, SeqCst);
+        }
+    }
+
+    /// Like `offer`, while translation goes on. For a pair that is known only once someone
+    /// speaks.
+    fn offer_meanwhile(self: &Arc<Self>, source: &str, target: &str) {
+        let pair = (source.to_owned(), target.to_owned());
+        if self.made().contains(&pair) || !missing(source, target) {
+            return;
+        }
+        let offers = self.clone();
+        std::thread::spawn(move || offers.offer(&pair.0, &pair.1));
     }
 }
 
 impl Provider for AppleTranslator {
     fn descriptor(&self) -> &Descriptor {
-        &self.0
+        &self.descriptor
     }
     fn location(&self, _: &Options) -> Location {
         Location::OnDevice
@@ -110,27 +176,28 @@ impl Provider for AppleTranslator {
         let Some(source) = &job.source else {
             return Readiness::Ready;
         };
-        match translation::status(source, &job.target) {
-            Status::Ready => Readiness::Ready,
-            Status::Downloadable => Readiness::NeedsAction {
-                message: "Download this language in System Settings > General > Language & Region > Translation Languages.".into(),
-            },
-            Status::Unsupported => {
-                unsupported(format!("Apple cannot translate {source} to {}", job.target))
-            }
+        let pair = (source.clone(), job.target.clone());
+        if !self.offers.made().contains(&pair) && missing(source, &job.target) {
+            return Readiness::NeedsDownload { bytes: None };
         }
+        usable(source, &job.target)
     }
     fn prepare(&self, job: &Job, _: &dyn Fn(f32)) -> Result<()> {
-        self.readiness(job).into_result()
+        let source = source(job)?;
+        self.offers.offer(source, &job.target);
+        usable(source, &job.target).into_result()
     }
 }
 
 impl Translator for AppleTranslator {
     fn open(&self, job: &Job) -> Result<Box<dyn TranslatorSession>> {
-        self.readiness(job).into_result()?;
         let (source, target) = (source(job)?.to_owned(), job.target.clone());
+        self.offers.offer_meanwhile(&source, &target);
+        usable(&source, &target).into_result()?;
         Ok(Box::new(Translation {
             warm: warm_up(&source, &target),
+            finished: self.offers.finished.load(SeqCst),
+            offers: self.offers.clone(),
             source,
             target,
             session: None,
@@ -149,12 +216,16 @@ fn warm_up(source: &str, target: &str) -> Option<JoinHandle<translation::Session
     }))
 }
 
-/// Reopens when the spoken language changes, which happens with a detecting recognizer.
+/// Reopens when the spoken language changes, which happens with a detecting recognizer, and
+/// once a language pack was downloaded.
 struct Translation {
     source: String,
     target: String,
     warm: Option<JoinHandle<translation::Session>>,
     session: Option<translation::Session>,
+    offers: Arc<Offers>,
+    /// Offers finished when `session` opened.
+    finished: usize,
 }
 
 impl TranslatorSession for Translation {
@@ -164,6 +235,12 @@ impl TranslatorSession for Translation {
         }
         if self.source != source {
             self.source = source.to_owned();
+            self.session = None;
+            self.offers.offer_meanwhile(source, &self.target);
+        }
+        let finished = self.offers.finished.load(SeqCst);
+        if finished != self.finished {
+            self.finished = finished;
             self.session = None;
         }
         self.session

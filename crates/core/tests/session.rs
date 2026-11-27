@@ -6,7 +6,7 @@ use std::{
 use openlang_core::{
     Error, Result,
     domain::*,
-    graph::{Emitter, GraphBuilder, Node},
+    graph::{Emitter, Graph, GraphBuilder, Node},
     nodes::{SttNode, TranslateNode},
     ports::*,
     realtime::{self, AudioReader},
@@ -667,9 +667,13 @@ fn a_failed_push_is_reported_once_and_recognition_goes_on() {
 }
 
 fn transcript(text: &str, is_final: bool) -> Packet {
+    transcript_of(SegmentId::new(), text, is_final)
+}
+
+fn transcript_of(id: SegmentId, text: &str, is_final: bool) -> Packet {
     Packet::Transcript(Arc::new(Transcript {
         segment: Segment {
-            id: SegmentId::new(),
+            id,
             revision: 0,
             origin: Origin::System,
             start: Duration::ZERO,
@@ -700,6 +704,130 @@ fn a_final_does_not_hold_back_the_next_partial() {
         .collect();
     assert_eq!(got.len(), 2);
     assert!(got[1].1.duration_since(t) < Duration::from_secs(1));
+    graph.finish();
+}
+
+/// Takes 400 ms for unfinished speech, which here is any text ending in "...".
+struct SlowOnPartials {
+    base: Base,
+}
+provider!(SlowOnPartials);
+impl Translator for SlowOnPartials {
+    fn open(&self, _: &Job) -> Result<Box<dyn TranslatorSession>> {
+        Ok(Box::new(SlowSession))
+    }
+}
+struct SlowSession;
+impl TranslatorSession for SlowSession {
+    fn translate(&mut self, text: &str, _: &str) -> Result<String> {
+        if text.ends_with("...") {
+            std::thread::sleep(Duration::from_millis(400));
+        }
+        Ok(format!("slow:{text}"))
+    }
+}
+
+/// A `TranslateNode` with a translator that is slow on partials, and what it emits.
+fn translate_slowly() -> (Graph, mpsc::Receiver<(Packet, Instant)>) {
+    let slow: Arc<dyn Translator> = Arc::new(SlowOnPartials {
+        base: Base {
+            d: descriptor("slow"),
+            location: Location::OnDevice,
+        },
+    });
+    let (tx, rx) = mpsc::channel();
+    let mut g = GraphBuilder::default();
+    let node = TranslateNode::new(vec![(slow, job())], "id".into(), Duration::ZERO);
+    let root = g.root(Box::new(node)).unwrap();
+    g.add(Box::new(Collect(tx, &[PacketKind::Translation])), &[root])
+        .unwrap();
+    (g.start(Arc::new(|_, _| {})).unwrap(), rx)
+}
+
+#[test]
+fn a_final_is_not_held_back_by_a_slow_partial() {
+    let (graph, rx) = translate_slowly();
+    graph.input().emit(transcript("one...", false));
+    std::thread::sleep(Duration::from_millis(50));
+    let t = Instant::now();
+    graph.input().emit(transcript("two", true));
+    let (got, at) = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    let Packet::Translation(got) = got else {
+        panic!("not a translation")
+    };
+    assert_eq!(got.text, "slow:two");
+    assert!(at.duration_since(t) < Duration::from_millis(200));
+    graph.finish();
+}
+
+#[test]
+fn a_late_partial_never_replaces_its_final() {
+    let (graph, rx) = translate_slowly();
+    let id = SegmentId::new();
+    graph.input().emit(transcript_of(id, "one...", false));
+    std::thread::sleep(Duration::from_millis(50));
+    graph.input().emit(transcript_of(id, "one two", true));
+    std::thread::sleep(Duration::from_millis(600));
+    let texts: Vec<String> = rx
+        .try_iter()
+        .filter_map(|(p, _)| match p {
+            Packet::Translation(t) => Some(t.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts.last().map(String::as_str),
+        Some("slow:one two"),
+        "{texts:?}"
+    );
+    graph.finish();
+}
+
+/// Answers at once, and remembers every text it was asked.
+struct Recording {
+    base: Base,
+    asked: Arc<Mutex<Vec<String>>>,
+}
+provider!(Recording);
+impl Translator for Recording {
+    fn open(&self, _: &Job) -> Result<Box<dyn TranslatorSession>> {
+        Ok(Box::new(RecordingSession(self.asked.clone())))
+    }
+}
+struct RecordingSession(Arc<Mutex<Vec<String>>>);
+impl TranslatorSession for RecordingSession {
+    fn translate(&mut self, text: &str, _: &str) -> Result<String> {
+        self.0.lock().unwrap().push(text.to_owned());
+        Ok(text.to_owned())
+    }
+}
+
+#[test]
+fn a_fast_translator_translates_a_final_whole_once_it_is_known_to_be_fast() {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let fast: Arc<dyn Translator> = Arc::new(Recording {
+        base: Base {
+            d: descriptor("fast"),
+            location: Location::OnDevice,
+        },
+        asked: asked.clone(),
+    });
+    let mut g = GraphBuilder::default();
+    let node = TranslateNode::new(vec![(fast, job())], "id".into(), Duration::ZERO);
+    g.root(Box::new(node)).unwrap();
+    let graph = g.start(Arc::new(|_, _| {})).unwrap();
+    let say = |partial: &str, end: &str| {
+        let id = SegmentId::new();
+        graph.input().emit(transcript_of(id, partial, false));
+        std::thread::sleep(Duration::from_millis(50));
+        asked.lock().unwrap().clear();
+        graph.input().emit(transcript_of(id, end, true));
+        std::thread::sleep(Duration::from_millis(50));
+        asked.lock().unwrap().clone()
+    };
+    // Its speed is not known yet: the final reuses the clause its partial translated.
+    assert_eq!(say("Hello, th", "Hello, there"), ["there"]);
+    assert_eq!(say("Bye, no", "Bye, now"), ["Bye, now"]);
     graph.finish();
 }
 

@@ -5,11 +5,12 @@ use std::{
     collections::{BTreeSet, VecDeque},
     mem,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, MutexGuard, PoisonError,
         mpsc::{
             Receiver, RecvTimeoutError, SendError, SyncSender, TryRecvError, channel, sync_channel,
         },
     },
+    thread::JoinHandle,
     time::Duration,
 };
 
@@ -27,11 +28,16 @@ const WINDOW: usize = RATE * 3;
 const STEP: usize = RATE;
 /// How often a detection starts while a recognizer is open and no switch is pending.
 const LOCKED_STEP: usize = RATE * 5;
-/// Audio kept for the recognizer while the language is still unknown.
+/// Audio kept for the recognizer while the language is still unknown, and heard audio kept
+/// while a vote for a new language is pending.
 const WAITING: usize = RATE * 10;
-/// Heard audio kept so a new recognizer can start where its language began.
+/// Heard audio kept, while no switch is pending, so a new recognizer can start where its
+/// language began.
 const KEPT: usize = WINDOW + 2 * STEP;
-/// How long `finish` waits for a recognizer that is still opening.
+/// Heard audio kept while a new recognizer opens, which may first download its model.
+const REPLAY: usize = RATE * 30;
+/// How long `finish` waits for a recognizer that is still opening, and a new recognizer for
+/// the last words of the one it replaces.
 const FINISH_LIMIT: Duration = Duration::from_secs(3);
 
 /// Opening needs one sure answer; switching needs the same new answer twice.
@@ -72,6 +78,9 @@ struct Current {
     language: String,
     /// Where the recognizer's first sample sits in this session.
     start: Duration,
+    /// Output held while the recognizer before this one says its last words, so the two never
+    /// mix in one segment. `None` lets output straight through.
+    held: Option<Vec<Result<SttUpdate>>>,
 }
 
 pub struct AutoLanguage {
@@ -81,6 +90,8 @@ pub struct AutoLanguage {
     current: Arc<Mutex<Current>>,
     recognizer: Option<Box<dyn SttSession>>,
     opening: Option<Opening>,
+    /// Replaced recognizers finishing on their own thread, each after the one before it.
+    retiring: Option<JoinHandle<()>>,
     /// Audio the recognizer has not heard yet.
     waiting: VecDeque<AudioChunk>,
     waiting_samples: usize,
@@ -96,17 +107,13 @@ pub struct AutoLanguage {
     answers: Receiver<(Duration, Result<Option<Detected>>)>,
 }
 
-/// A recognizer being prepared and opened, and the old one finished, on their own thread, so
-/// the graph never waits for them.
+/// A recognizer being prepared and opened on its own thread, so the graph never waits for it.
 struct Opening {
     current: Arc<Mutex<Current>>,
-    /// Heard by the old recognizer, but already in the new language.
-    replay: VecDeque<AudioChunk>,
-    /// The new recognizer, or the error and the old one, still unfinished, given back.
-    done: Receiver<Opened>,
+    /// Where its language began: audio heard from here on is heard again by the new recognizer.
+    from: Duration,
+    done: Receiver<Result<Box<dyn SttSession>>>,
 }
-
-type Opened = (Result<Box<dyn SttSession>>, Option<Box<dyn SttSession>>);
 
 impl AutoLanguage {
     pub fn open(
@@ -140,6 +147,7 @@ impl AutoLanguage {
             current: Arc::default(),
             recognizer: None,
             opening: None,
+            retiring: None,
             waiting: VecDeque::new(),
             waiting_samples: 0,
             heard: VecDeque::new(),
@@ -194,7 +202,7 @@ impl AutoLanguage {
         } else {
             FIRST
         };
-        let current = self.lock().language.clone();
+        let current = lock(&self.current).language.clone();
         if found.language == current || found.confidence < rule.confidence {
             self.candidate = None;
             return;
@@ -211,9 +219,9 @@ impl AutoLanguage {
         self.switch(found.language, from);
     }
 
-    /// The old recognizer finishes in its language; the new one starts where the first window
-    /// that voted for its language began. Preparing, opening and finishing run on their own
-    /// thread; audio is held meanwhile.
+    /// Prepares and opens a recognizer for `language` on its own thread. The current one keeps
+    /// hearing meanwhile, so captions never wait for a switch. `from`: where the first window
+    /// that voted for the language began.
     fn switch(&mut self, language: String, from: Duration) {
         let job = Job {
             source: Some(language.clone()),
@@ -221,43 +229,53 @@ impl AutoLanguage {
         };
         let current = Arc::new(Mutex::new(Current {
             language,
-            start: Duration::ZERO,
+            ..Current::default()
         }));
-        let labels = current.clone();
-        let out = self.out.clone();
-        let labelled: SttOutput = Arc::new(move |update| out(update.map(|u| label(&labels, u))));
+        let out = output(&current, self.out.clone());
         let provider = self.provider.clone();
-        let mut old = self.recognizer.take();
-        let out = self.out.clone();
-        let (answer, done) = channel::<Opened>();
+        let (answer, done) = channel();
         std::thread::spawn(move || {
-            let opened =
-                prepare(provider.as_ref(), &job).and_then(|()| provider.open(&job, labelled));
-            // The old one says its last words before the new one hears anything, so the two
-            // never mix in one segment.
-            if opened.is_ok()
-                && let Some(mut old) = old.take()
-                && let Err(e) = old.finish()
-            {
-                out(Err(e));
-            }
+            let opened = prepare(provider.as_ref(), &job).and_then(|()| provider.open(&job, out));
             // Nobody waits any more: the session stopped first.
-            if let Err(SendError((opened, old))) = answer.send((opened, old)) {
-                for mut late in opened.into_iter().chain(old) {
-                    let _ = late.finish();
-                }
+            if let Err(SendError(Ok(mut late))) = answer.send(opened) {
+                let _ = late.finish();
             }
         });
-        let replay = mem::take(&mut self.heard)
-            .into_iter()
-            .filter(|c| end(c) > from)
-            .collect();
-        self.heard_samples = 0;
         self.opening = Some(Opening {
             current,
-            replay,
+            from,
             done,
         });
+    }
+
+    /// The replaced recognizer says its last words on its own thread, after the one replaced
+    /// before it; the output of `next` waits for them, but never longer than `FINISH_LIMIT`.
+    /// Words that come later would mix with the new language, so they are dropped.
+    fn retire(&mut self, mut old: Box<dyn SttSession>, next: Arc<Mutex<Current>>) {
+        let replaced = self.current.clone();
+        lock(&next).held = Some(Vec::new());
+        let before = self.retiring.take();
+        let out = self.out.clone();
+        self.retiring = Some(std::thread::spawn(move || {
+            if let Some(before) = before {
+                let _ = before.join();
+            }
+            let (said, last_words) = channel();
+            let report = out.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = old.finish() {
+                    report(Err(e));
+                }
+                let _ = said.send(());
+            });
+            if last_words.recv_timeout(FINISH_LIMIT).is_err() {
+                lock(&replaced).held = Some(Vec::new());
+            }
+            let mut next = lock(&next);
+            for update in next.held.take().into_iter().flatten() {
+                out(update);
+            }
+        }));
     }
 
     /// Puts the new recognizer in place once it opened, waiting at most `wait` for it.
@@ -266,40 +284,41 @@ impl AutoLanguage {
             return;
         };
         let next = match opening.done.recv_timeout(wait) {
-            Ok((Ok(next), _)) => next,
+            Ok(Ok(next)) => next,
             // A language the recognizer cannot open keeps the one that works.
-            Ok((Err(e), old)) => {
-                self.recognizer = old;
-                return (self.out)(Err(e));
-            }
+            Ok(Err(e)) => return (self.out)(Err(e)),
             Err(RecvTimeoutError::Timeout) => {
                 self.opening = Some(opening);
                 return;
             }
             Err(RecvTimeoutError::Disconnected) => return,
         };
+        // Heard by the old recognizer, but already in the new language.
+        let replay: Vec<AudioChunk> = mem::take(&mut self.heard)
+            .into_iter()
+            .filter(|c| end(c) > opening.from)
+            .collect();
+        self.heard_samples = 0;
         let first_at = self.first_at.unwrap_or_default();
-        let next_at = opening
-            .replay
-            .front()
+        let next_at = replay
+            .first()
             .or(self.waiting.front())
             .map_or(first_at, |c| c.at);
-        opening
-            .current
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .start = next_at.saturating_sub(first_at);
+        lock(&opening.current).start = next_at.saturating_sub(first_at);
+        if let Some(old) = self.recognizer.take() {
+            self.retire(old, opening.current.clone());
+        }
         self.current = opening.current;
         self.recognizer = Some(next);
-        for chunk in opening.replay {
+        for chunk in replay {
             self.hear(chunk);
         }
     }
 
-    /// Gives waiting audio to the recognizer, unless a new one may still claim it. Held audio
-    /// stays bounded: the oldest goes to the recognizer there is, or is dropped.
+    /// Gives waiting audio to the recognizer. Until the first one opens, audio waits, bounded:
+    /// the oldest is dropped.
     fn feed(&mut self) {
-        let hold = self.recognizer.is_none() || self.candidate.is_some() || self.opening.is_some();
+        let hold = self.recognizer.is_none();
         while self.waiting_samples > WAITING || (!hold && !self.waiting.is_empty()) {
             let Some(chunk) = self.waiting.pop_front() else {
                 break;
@@ -315,7 +334,12 @@ impl AutoLanguage {
         self.push_recognizer(&chunk);
         self.heard_samples += chunk.samples.len();
         self.heard.push_back(chunk);
-        while self.heard_samples > KEPT {
+        let kept = match (&self.opening, &self.candidate) {
+            (Some(_), _) => REPLAY,
+            (None, Some(_)) => WAITING,
+            (None, None) => KEPT,
+        };
+        while self.heard_samples > kept {
             let Some(old) = self.heard.pop_front() else {
                 break;
             };
@@ -331,10 +355,24 @@ impl AutoLanguage {
             (self.out)(Err(e));
         }
     }
+}
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Current> {
-        self.current.lock().unwrap_or_else(PoisonError::into_inner)
-    }
+fn lock(current: &Mutex<Current>) -> MutexGuard<'_, Current> {
+    current.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Output of one recognizer: labelled with its language and place, and held while the one
+/// before it finishes.
+fn output(current: &Arc<Mutex<Current>>, out: SttOutput) -> SttOutput {
+    let current = current.clone();
+    Arc::new(move |update| {
+        let mut current = lock(&current);
+        let update = update.map(|u| label(&current, u));
+        match &mut current.held {
+            Some(held) => held.push(update),
+            None => out(update),
+        }
+    })
 }
 
 fn prepare(provider: &dyn SpeechToText, job: &Job) -> Result<()> {
@@ -353,8 +391,7 @@ fn end(chunk: &AudioChunk) -> Duration {
     chunk.at + Duration::from_secs_f64(seconds(chunk.samples.len()))
 }
 
-fn label(current: &Mutex<Current>, mut update: SttUpdate) -> SttUpdate {
-    let current = current.lock().unwrap_or_else(PoisonError::into_inner);
+fn label(current: &Current, mut update: SttUpdate) -> SttUpdate {
     update
         .language
         .get_or_insert_with(|| current.language.clone());
@@ -382,6 +419,9 @@ impl SttSession for AutoLanguage {
         self.opening = None;
         self.candidate = None;
         self.feed();
+        if let Some(retiring) = self.retiring.take() {
+            let _ = retiring.join();
+        }
         self.recognizer.take().map_or(Ok(()), |mut r| r.finish())
     }
 }

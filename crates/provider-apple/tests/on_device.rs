@@ -63,6 +63,30 @@ fn run() {
             "missing `{expect}`"
         );
     }
+    let job = Job {
+        source: Some("en-US".into()),
+        target: "id".into(),
+        options: Options::new(),
+    };
+    let talk = contract::speak(
+        "Samantha",
+        "Listeners, imagine a friend asks, would you rather have a picnic in the park or watch a \
+         movie at home this Saturday? Choose one now, even if you could go either way. In a \
+         moment, you will pause us and give yourself one minute to answer out loud, explaining \
+         your choice, your reasons, and what you would do there. [[slnc 900]] Last weekend we had \
+         Saturday afternoon free, so we talked about it over breakfast, and in the end we chose \
+         the park, because the weather was perfect and we had not been outside all week.",
+    );
+    for stress in [false, true] {
+        let report = contract::latency(
+            registry.stt("apple-speech").unwrap().clone(),
+            registry.translator("apple-translate").unwrap().clone(),
+            &job,
+            &talk,
+            stress,
+        );
+        println!("stress {stress}: {report:#?}");
+    }
     let bad = Job {
         source: Some("tlh".into()),
         ..Job::default()
