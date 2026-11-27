@@ -178,22 +178,9 @@ mod tests {
 
     #[test]
     fn every_language_has_a_name() {
-        // `server::LANGUAGES` is private to its module, so read it from the source.
-        let source = include_str!("server.rs");
-        let list = source
-            .split_once("const LANGUAGES: &[&str] = &[")
-            .and_then(|(_, rest)| rest.split_once("];"))
-            .expect("LANGUAGES in server.rs")
-            .0;
-        let codes: Vec<&str> = list
-            .split(',')
-            .map(|c| c.trim().trim_matches('"'))
-            .filter(|c| !c.is_empty())
-            .collect();
-        assert!(codes.len() > 30);
-        for code in codes {
+        for code in crate::server::LANGUAGES {
             assert!(
-                NAMES.iter().any(|(_, c)| *c == code),
+                NAMES.iter().any(|(_, c)| c == code),
                 "no English name for {code}"
             );
         }
