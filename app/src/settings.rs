@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, io::ErrorKind, path::PathBuf};
 
 use openlang_core::{
     Error, Result,
@@ -159,28 +159,75 @@ pub fn secret_key(provider: &str, field: &str) -> String {
     format!("{provider}/{field}")
 }
 
+/// The file format `save` writes. Files from before versioning are format 1.
+const SCHEMA: u32 = 1;
+
+/// What goes to disk: the settings plus the format they are in.
+#[derive(Serialize)]
+struct Stored<'a> {
+    version: u32,
+    #[serde(flatten)]
+    settings: &'a Settings,
+}
+
+/// Settings from file bytes, or why they cannot be used.
+fn parse(bytes: &[u8]) -> std::result::Result<Settings, String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let version = value
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1);
+    if version > u64::from(SCHEMA) {
+        return Err(format!("written by a newer OpenLang (format {version})"));
+    }
+    serde_json::from_value(value).map_err(|e| e.to_string())
+}
+
 pub struct SettingsFile(pub PathBuf);
 
 impl SettingsFile {
     pub fn load(&self, r: &Registry) -> Settings {
-        fs::read(&self.0)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
-            .unwrap_or_default()
-            .fit(r)
+        let settings = match fs::read(&self.0) {
+            Ok(bytes) => parse(&bytes).unwrap_or_else(|why| {
+                self.set_aside(&why);
+                Settings::default()
+            }),
+            Err(e) if e.kind() == ErrorKind::NotFound => Settings::default(),
+            Err(e) => {
+                eprintln!("settings: cannot read {}: {e}", self.0.display());
+                Settings::default()
+            }
+        };
+        settings.fit(r)
     }
 
     pub fn save(&self, s: &Settings) -> Result<()> {
-        let fail = |e: std::io::Error| Error::Config(e.to_string());
         if let Some(dir) = self.0.parent() {
-            fs::create_dir_all(dir).map_err(fail)?;
+            fs::create_dir_all(dir).map_err(config)?;
         }
-        let json = serde_json::to_vec_pretty(s).map_err(|e| Error::Config(e.to_string()))?;
+        let stored = Stored {
+            version: SCHEMA,
+            settings: s,
+        };
+        let json = serde_json::to_vec_pretty(&stored).map_err(config)?;
         // Write beside, then rename, so a crash never leaves half a file.
         let temporary = self.0.with_extension("tmp");
-        fs::write(&temporary, json).map_err(fail)?;
-        fs::rename(&temporary, &self.0).map_err(fail)
+        fs::write(&temporary, json).map_err(config)?;
+        fs::rename(&temporary, &self.0).map_err(config)
     }
+
+    /// Moves an unusable file out of the way, so the next save cannot destroy it.
+    fn set_aside(&self, why: &str) {
+        let backup = self.0.with_extension("json.bak");
+        match fs::rename(&self.0, &backup) {
+            Ok(()) => eprintln!("settings: {why}; kept as {}", backup.display()),
+            Err(e) => eprintln!("settings: {why}; could not keep it: {e}"),
+        }
+    }
+}
+
+fn config(e: impl std::fmt::Display) -> Error {
+    Error::Config(e.to_string())
 }
 
 /// The operating system's own password store.
@@ -216,9 +263,13 @@ fn failed(e: keyring::Error) -> Error {
 mod tests {
     use super::*;
 
+    fn temp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("openlang-{}-{name}.json", std::process::id()))
+    }
+
     #[test]
     fn settings_survive_a_round_trip_and_drop_missing_modules() {
-        let path = std::env::temp_dir().join(format!("openlang-{}.json", std::process::id()));
+        let path = temp("round-trip");
         let file = SettingsFile(path.clone());
         let registry = crate::modules::registry(&std::env::temp_dir());
         let saved = Settings {
@@ -227,10 +278,38 @@ mod tests {
             ..file.load(&registry)
         };
         file.save(&saved).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
         let loaded = file.load(&registry);
         fs::remove_file(path).unwrap();
+        assert!(written.contains(r#""version": 1"#));
         assert_eq!(loaded.target_language, "ja");
         assert!(!loaded.stt.contains(&"gone".into()));
+    }
+
+    #[test]
+    fn files_from_before_versioning_still_load() {
+        let s = parse(br#"{"target_language":"ja"}"#).unwrap();
+        assert_eq!(s.target_language, "ja");
+    }
+
+    #[test]
+    fn unusable_files_are_refused() {
+        assert!(parse(br#"{"version":99}"#).is_err());
+        assert!(parse(b"{ not json").is_err());
+    }
+
+    #[test]
+    fn a_broken_file_is_kept_aside_not_overwritten() {
+        let path = temp("broken");
+        let backup = path.with_extension("json.bak");
+        fs::write(&path, b"{ not json").unwrap();
+        let registry = crate::modules::registry(&std::env::temp_dir());
+        let loaded = SettingsFile(path.clone()).load(&registry);
+        let kept = fs::read(&backup).unwrap();
+        fs::remove_file(backup).unwrap();
+        assert_eq!(loaded.target_language, Settings::default().target_language);
+        assert!(!path.exists());
+        assert_eq!(kept, b"{ not json");
     }
 
     #[test]
