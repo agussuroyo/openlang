@@ -47,7 +47,7 @@ Test notes:
 
 **Extending without touching the pipeline.** `session::Extension::attach` gets `Taps` (node ids for audio/transcript/translation/caption) to add branches, such as future TTS or history. An `EventSink` receives serializable `SessionEvent`s (versioned by `EVENT_SCHEMA`). `core/tests/session.rs` shows both, using test-only nodes.
 
-**Segments.** Providers only emit `SttUpdate { text, start, end, is_final }`. `SttNode`'s segmenter assigns `SegmentId` and revision. Partials and the final of one utterance share an id, and the UI updates words in place by that id. `Stabilizer` marks the common word prefix of consecutive revisions as stable. Only stable words are "read" by the pill animation.
+**Segments.** Providers only emit `SttUpdate { text, start, end, is_final }`. `SttNode`'s segmenter assigns `SegmentId` and revision. Partials and the final of one utterance share an id, and the UI updates the text in place by that id. `Stabilizer` marks the common word prefix of consecutive revisions as stable (`Caption::stable_words`); the subtitle UI does not use it now.
 
 **Realtime audio.** Audio callbacks only write to an `rtrb` ring via `realtime::AudioWriter`: no locks, allocation or logging. Lost samples are counted. A source calls `Invalidator::invalidate` on device change; the session pump then reopens the source.
 
@@ -57,11 +57,14 @@ Test notes:
   - The Swift `Gate` guarantees no callback after `ol_stt_finish` returns; Rust frees the callback box relying on that.
   - Apple STT uses `SpeechTranscriber`, falling back to `DictationTranscriber` for locales such as `id-ID`. It cannot auto-detect the language.
   - Translation uses `TranslationSession(installedSource:)` with the default high-fidelity strategy (low-latency packs are not installed). It warms up on open.
+- `core/src/auto_language.rs`: Auto language for a recognizer that cannot detect (Apple). `LanguageDetector` (Whisper base model, `provider-whisper/src/detect.rs`) hears 3 s windows on its own thread; the recognizer opens with the detected primary tag (Apple accepts `id`) and gets the waiting audio. Switching needs the same new language twice in a row. Default spoken language is Auto.
 - `speech-chunks`: shared by non-streaming engines (Whisper, OpenAI-compatible). It cuts at pauses with an energy VAD, and a slow engine skips partials but never finals.
 - `provider-openai`:
   - `location()` is `OnDevice` only for loopback URLs.
   - Keys are refused over non-loopback `http`, and redirects are disabled.
   - Network providers also require `allow_network` (`registry::check_consent`).
+  - Each service is one row in `services.rs` (address, default model, extra chat JSON, speech API). Its speech and translate entries share one id, so one key in the keychain.
+  - Some models refuse `temperature` or think by default (slow captions); the row's `extra` turns thinking off or down.
 - `provider-whisper`: models are downloaded on demand with sha256 verification (`models.rs`).
 - `audio-coreaudio`: global Core Audio process tap + private aggregate device, excluding this process so spoken output can never be re-captured.
 
@@ -70,7 +73,7 @@ Test notes:
 ## App shell (`app/`)
 
 - Windows:
-  - `caption`: Read along subtitles. It hides itself when quiet so it never blocks clicks.
+  - `caption`: Movie style subtitles on a transparent window, newest sentence only. It hides itself when quiet so it never blocks clicks. Look comes from `Settings::subtitle` (`SubtitleStyle`): `ui/caption/style.js` maps each field to a CSS variable, so a new option is one Rust field, one mapping line and one Settings control.
   - `island`: Morph island controls. The window is resized to the island shape and grows away from the screen edge it is anchored to.
   - `settings`: created on demand, destroyed on close.
 - Placement is pure geometry in `placement.rs` (logical points, multi-monitor, snap, never overlap) and has unit tests. `windows.rs` applies it. Dragging is manual (`ui/shared/drag.js` → `drag_start/move/end`), not Tauri drag regions. `watch_displays` re-arranges when displays change or wake; while every display sleeps the monitor list is empty.
@@ -81,9 +84,9 @@ Test notes:
 ## UI (`ui/`)
 
 - No bundler and no dependencies. ES modules use `window.__TAURI__` (`withGlobalTauri`).
-- `shared/tokens.css` is the single source for colours (light and dark), radii and spring values ("stiffness damping").
+- `shared/tokens.css` is the single source for colours (light and dark), radii, depth, easing, the subtitle outline and spring values ("stiffness damping").
 - `shared/motion.js` is a spring engine with one rAF loop that sleeps when everything is at rest. Keep it sleeping when idle.
-- Component motion follows https://designbookmark.com/motion. Read along, Morph island and Bottom bar keep their original spring values.
+- Component motion follows https://designbookmark.com/motion. Morph island and Bottom bar keep their original spring values.
 
 ## macOS gotchas
 

@@ -1,6 +1,7 @@
 import { invoke, listen, short, explain } from '../shared/app.js';
 import { draggable } from '../shared/drag.js';
 import { createIsland } from './island.js';
+import { soundBars } from './bars.js';
 
 const PAD = 10;   // room around the island for its overshoot
 const $ = id => document.getElementById(id);
@@ -17,6 +18,7 @@ function fit([w, h]) {
   if (room[0] !== want[0] || room[1] !== want[1]) settle = setTimeout(() => apply(want), 700);
 }
 const island = createIsland($('island'), fit);
+const bars = soundBars($('bars'));
 
 function visibility() {
   const busy = problem || ['preparing', 'starting', 'error'].includes(status.state);
@@ -29,6 +31,8 @@ function applySettings(next) {
   settings = next;
   const pair = `${short(next.source_language)} to ${short(next.target_language)}`;
   for (const id of ['idlePair', 'pair', 'panelPair']) $(id).textContent = pair;
+  island.refit();
+  document.body.dataset.bars = next.sound_bars ? 'on' : 'off';
   visibility();
 }
 
@@ -41,8 +45,9 @@ function fail(error) {
   const e = explain(error), act = $('errAct');
   $('errTitle').textContent = e.title;
   $('errDetail').textContent = e.detail;
+  $('errDetail').title = e.detail;
   const mic = /microphone/i.test(e.detail);
-  act.textContent = e.code === 'permission' ? 'Open permission' : 'Settings';
+  act.textContent = e.code === 'permission' ? 'Allow' : 'Settings';
   act.onclick = () => e.code === 'permission'
     ? invoke('open_privacy', { pane: mic ? 'microphone' : 'system_audio' })
     : invoke('show_settings');
@@ -62,7 +67,7 @@ function applyStatus(next) {
     ticking = setInterval(tickClock, 1000);
     $('note').textContent = 'Listening';
   }
-  if (!live) clearInterval(ticking);
+  if (!live) { clearInterval(ticking); bars.reset(); }
   clearTimeout(waiting);
   if (next.state === 'error') return fail(next.error);
   if (next.state === 'preparing') {
@@ -81,7 +86,9 @@ function applyStatus(next) {
 }
 
 function onEvent({ type, data }) {
-  if (type === 'silent') {
+  if (type === 'level') {
+    if (settings.sound_bars) bars.set(data.origin, data.level);
+  } else if (type === 'silent') {
     $('note').textContent = data.silent ? 'No sound yet. Check permission.' : 'Listening';
   } else if (type === 'failed') {
     fail(data.error);

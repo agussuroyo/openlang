@@ -1,8 +1,13 @@
 //! Whisper running locally. Detects the language by itself. Models are downloaded on first use.
 
+mod detect;
 mod models;
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use openlang_core::{Error, Result, ports::*, registry::Registry};
 use openlang_speech_chunks::{ChunkedSession, Heard, Recognizer};
@@ -33,8 +38,9 @@ pub fn register(registry: &mut Registry, models: PathBuf) {
                 default: models::ALL[0].id,
             }],
         },
-        models,
+        models: models.clone(),
     }));
+    registry.detector = Some(Arc::new(detect::WhisperDetector::new(models)));
 }
 
 struct Whisper {
@@ -65,13 +71,10 @@ impl Provider for Whisper {
         }
     }
     fn readiness(&self, job: &Job) -> Readiness {
-        match self.model(&job.options) {
-            Ok(m) if m.is_installed(&self.models) => Readiness::Ready,
-            Ok(m) => Readiness::NeedsDownload {
-                bytes: Some(m.bytes),
-            },
-            Err(e) => unsupported(e.to_string()),
-        }
+        self.model(&job.options).map_or_else(
+            |e| unsupported(e.to_string()),
+            |m| m.readiness(&self.models),
+        )
     }
     fn prepare(&self, job: &Job, progress: &dyn Fn(f32)) -> Result<()> {
         self.model(&job.options)?.download(&self.models, progress)
@@ -82,13 +85,17 @@ fn failed(e: whisper_rs::WhisperError) -> Error {
     Error::Provider(format!("whisper: {e}"))
 }
 
+fn load(model: &Path) -> Result<WhisperState> {
+    WhisperContext::new_with_params(model, WhisperContextParameters::default())
+        .map_err(failed)?
+        .create_state()
+        .map_err(failed)
+}
+
 impl SpeechToText for Whisper {
     fn open(&self, job: &Job, out: SttOutput) -> Result<Box<dyn SttSession>> {
         self.readiness(job).into_result()?;
-        let path = self.model(&job.options)?.path(&self.models);
-        let context = WhisperContext::new_with_params(&path, WhisperContextParameters::default())
-            .map_err(failed)?;
-        let state = context.create_state().map_err(failed)?;
+        let state = load(&self.model(&job.options)?.path(&self.models))?;
         let language = job
             .source
             .as_deref()

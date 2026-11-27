@@ -2962,6 +2962,7 @@ dependencies = [
 name = "openlang-provider-openai"
 version = "0.1.0"
 dependencies = [
+ "openlang-contract",
  "openlang-core",
  "openlang-speech-chunks",
  "serde_json",

@@ -208,11 +208,11 @@ pub fn show_settings(app: &AppHandle) -> Result<()> {
     let fail = |e: tauri::Error| Error::Config(e.to_string());
     let window = match app.get_webview_window("settings") {
         Some(w) => w,
-        None => WebviewWindowBuilder::new(
+        None => blend_title_bar(WebviewWindowBuilder::new(
             app,
             "settings",
             WebviewUrl::App("settings/index.html".into()),
-        )
+        ))
         .title("OpenLang Settings")
         .inner_size(520.0, 640.0)
         .min_inner_size(400.0, 520.0)
@@ -221,6 +221,21 @@ pub fn show_settings(app: &AppHandle) -> Result<()> {
     };
     window.show().map_err(fail)?;
     window.set_focus().map_err(fail)
+}
+
+type Builder<'a> = WebviewWindowBuilder<'a, tauri::Wry, AppHandle>;
+
+/// macOS draws the window buttons over the page. Other systems keep their own title bar.
+#[cfg(target_os = "macos")]
+fn blend_title_bar(builder: Builder) -> Builder {
+    builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn blend_title_bar(builder: Builder) -> Builder {
+    builder
 }
 
 /// Shows or removes the sample caption that lets people see where subtitles will be.

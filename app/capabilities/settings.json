@@ -1,0 +1,9 @@
+{
+  "identifier": "settings",
+  "windows": [
+    "settings"
+  ],
+  "permissions": [
+    "core:window:allow-start-dragging"
+  ]
+}

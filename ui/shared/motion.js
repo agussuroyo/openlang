@@ -15,7 +15,7 @@ export function tune(s, [k, c]) {
   s.k = k;
   s.c = reduce.matches ? 2 * Math.sqrt(k) : c;
 }
-export function jump(s, x) { s.x = s.t = x; s.v = 0; }
+function jump(s, x) { s.x = s.t = x; s.v = 0; }
 
 function step(s, dt) {
   s.v += (-s.k * (s.x - s.t) - s.c * s.v) * dt;

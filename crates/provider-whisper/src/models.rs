@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use openlang_core::{Error, Result};
+use openlang_core::{Error, Result, ports::Readiness};
 use sha2::{Digest, Sha256};
 
 pub struct Model {
@@ -51,8 +51,13 @@ impl Model {
     }
 
     /// A file only gets its final name after its checksum matched.
-    pub fn is_installed(&self, directory: &Path) -> bool {
-        self.path(directory).is_file()
+    pub fn readiness(&self, directory: &Path) -> Readiness {
+        if self.path(directory).is_file() {
+            return Readiness::Ready;
+        }
+        Readiness::NeedsDownload {
+            bytes: Some(self.bytes),
+        }
     }
 
     pub fn download(&self, directory: &Path, progress: &dyn Fn(f32)) -> Result<()> {

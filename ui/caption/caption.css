@@ -1,16 +1,14 @@
+/* Movie subtitles: no panel. The outline comes from --sub-shadow in tokens.css. */
 html,body{background:transparent}
-body{padding:6px;display:flex}
-body.dragging .panel,body.dragging .w{cursor:grabbing}
+body{padding:6px;display:flex;font-family:var(--sub-font,var(--font))}
+body.dragging .subtitle{cursor:grabbing}
 
-/* Read along: opaque, so contrast holds over any film */
-.panel{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;gap:4px;padding:10px 14px 12px;border-radius:var(--r-panel);background:var(--card);cursor:grab;transition:opacity .2s ease}
-.panel.quiet{opacity:0}
-.original{flex:none;padding:0 calc(var(--size) * .2);color:var(--muted);font-size:var(--size);line-height:1.4;max-height:1.4em;overflow:hidden;white-space:nowrap;direction:rtl;text-align:left;text-overflow:ellipsis}
-.original bdi{unicode-bidi:isolate}
-.view{flex:1 1 auto;min-height:0;overflow:hidden;position:relative}
-.read{position:relative;padding:0 .2em;color:var(--unread);font-size:var(--size);font-weight:600;letter-spacing:-.02em;line-height:1.45;will-change:transform}
-.seg{display:block}
-.w{position:relative;z-index:1;transition:color .18s ease}
-.w.past{color:var(--text)}
-.w.now{color:var(--on-inverse)}
-.pill{position:absolute;left:0;top:0;height:1.3em;border-radius:.34em;background:var(--inverse);will-change:transform,width,opacity;pointer-events:none}
+.subtitle{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:.1em;color:var(--sub-color);font-size:var(--sub-size);font-weight:600;line-height:1.3;text-align:center;text-shadow:var(--sub-shadow);cursor:grab;transition:opacity .2s ease}
+.subtitle.quiet{opacity:0}
+
+/* At most two lines each; a long sentence keeps its newest words in view. */
+.original,.translation{max-height:2.8em;padding:.1em .3em;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
+.original span,.translation span{unicode-bidi:plaintext}
+.original{font-size:.8em;opacity:.85}
+.original:has(span:empty),.translation:has(span:empty){display:none}
+body[data-show=translation] .original,body[data-show=original] .translation{display:none}

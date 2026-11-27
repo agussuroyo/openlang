@@ -34,6 +34,17 @@ const LONGEST: usize = RATE * 12;
 /// Quieter than this is never speech, whatever the noise floor.
 const FLOOR: f32 = 0.004;
 
+fn level(frame: &[f32]) -> f32 {
+    (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt()
+}
+
+/// 16 kHz mono with at least one second of sound above silence.
+pub fn has_speech(samples: &[f32]) -> bool {
+    let (frames, _) = samples.as_chunks::<FRAME>();
+    let loud = frames.iter().filter(|f| level(*f) > FLOOR).count();
+    loud * FRAME >= RATE
+}
+
 #[derive(Debug, PartialEq)]
 enum Cut {
     Partial(Vec<f32>),
@@ -82,7 +93,7 @@ impl Cutter {
 
     fn frame(&mut self, frame: &[f32]) -> Option<Cut> {
         self.position += FRAME;
-        let level = (frame.iter().map(|s| s * s).sum::<f32>() / FRAME as f32).sqrt();
+        let level = level(frame);
         let loud = level > (self.noise * 3.0).max(FLOOR);
         if !loud {
             self.noise += (level - self.noise) * 0.05;
@@ -223,6 +234,12 @@ mod tests {
     }
     fn silence(ms: usize) -> Vec<f32> {
         vec![0.0005; RATE * ms / 1000]
+    }
+
+    #[test]
+    fn speech_needs_one_loud_second() {
+        assert!(has_speech(&[silence(2000), voice(1000)].concat()));
+        assert!(!has_speech(&[silence(2000), voice(900)].concat()));
     }
     fn finals(c: &[Cut]) -> usize {
         c.iter().filter(|c| matches!(c, Cut::Final(_))).count()

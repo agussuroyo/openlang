@@ -8,6 +8,7 @@ use std::{
 };
 
 use openlang_core::{domain::*, ports::*, registry::Registry};
+use openlang_provider_openai::{Address, SERVICES, Service};
 
 fn serve(status: &'static str, body: &'static str) -> (String, mpsc::Receiver<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -77,19 +78,15 @@ fn translates() {
     assert!(request.starts_with("POST /v1/chat/completions"));
     assert!(request.to_lowercase().contains("authorization: bearer k"));
     assert!(request.contains(r#"Good \"morning\""#));
+    assert!(request.contains(r#""temperature":0"#));
 }
 
-#[test]
-fn recognizes_an_utterance() {
-    let (base, seen) = serve("200 OK", r#"{"text":"hello"}"#);
-    let r = registry();
+/// Speaks one second of tone and returns what the engine heard.
+fn hear(stt: &dyn SpeechToText, job: &Job) -> Vec<SttUpdate> {
     let heard: Arc<Mutex<Vec<SttUpdate>>> = Arc::default();
     let log = heard.clone();
-    let mut s = r.stt[0]
-        .open(
-            &job(&base, ""),
-            Arc::new(move |u| log.lock().unwrap().push(u.unwrap())),
-        )
+    let mut s = stt
+        .open(job, Arc::new(move |u| log.lock().unwrap().push(u.unwrap())))
         .unwrap();
     let samples = (0..16_000).map(|i| (i as f32 * 0.2).sin() * 0.3).collect();
     s.push(&AudioChunk {
@@ -100,7 +97,14 @@ fn recognizes_an_utterance() {
     })
     .unwrap();
     s.finish().unwrap();
-    assert_eq!(heard.lock().unwrap()[0].text, "hello");
+    heard.lock().unwrap().clone()
+}
+
+#[test]
+fn recognizes_an_utterance() {
+    let (base, seen) = serve("200 OK", r#"{"text":"hello"}"#);
+    let r = registry();
+    assert_eq!(hear(r.stt[0].as_ref(), &job(&base, ""))[0].text, "hello");
     let request = seen.recv().unwrap();
     assert!(request.windows(4).any(|w| w == b"RIFF"));
 }
@@ -154,4 +158,134 @@ fn never_sends_a_key_unencrypted() {
             .open(&job("http://api.example.com/v1", ""))
             .is_ok()
     );
+}
+
+fn service(id: &str) -> Service {
+    *SERVICES.iter().find(|s| s.id == id).unwrap()
+}
+
+/// A registry with one cloud service moved to a local test server.
+fn moved(id: &str, base: &str) -> Registry {
+    let base = Box::leak(base.trim_end_matches("/v1").to_owned().into_boxed_str());
+    let mut r = Registry::default();
+    openlang_provider_openai::add(
+        &mut r,
+        Service {
+            address: Address::Editable(base),
+            ..service(id)
+        },
+    );
+    r
+}
+
+fn options(pairs: &[(&str, &str)]) -> Options {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()
+}
+
+fn text_of(request: Vec<u8>) -> String {
+    String::from_utf8_lossy(&request).into_owned()
+}
+
+#[test]
+fn deepseek_translates_with_its_default_model_and_no_thinking() {
+    let (base, seen) = serve("200 OK", r#"{"choices":[{"message":{"content":"Halo"}}]}"#);
+    let r = moved("deepseek", &base);
+    let job = Job {
+        options: options(&[("key", "k")]),
+        ..job(&base, "k")
+    };
+    let mut s = r.translators[0].open(&job).unwrap();
+    assert_eq!(s.translate("Hello", "en").unwrap(), "Halo");
+    let request = text_of(seen.recv().unwrap());
+    assert!(request.starts_with("POST /chat/completions"), "{request}");
+    assert!(request.contains(r#""model":"deepseek-flash""#), "{request}");
+    assert!(
+        request.contains(r#""thinking":{"type":"disabled"}"#),
+        "{request}"
+    );
+    assert!(!request.contains("temperature"), "{request}");
+}
+
+#[test]
+fn deepseek_hears_with_the_audio_file_only() {
+    let (base, seen) = serve(
+        "200 OK",
+        r#"{"request_id":"r","text":"halo","duration_ms":1000}"#,
+    );
+    let r = moved("deepseek", &base);
+    let job = Job {
+        options: options(&[("key", "k")]),
+        ..job(&base, "k")
+    };
+    let heard = hear(r.stt[0].as_ref(), &job);
+    assert_eq!(heard[0].text, "halo");
+    assert_eq!(heard[0].language, None);
+    let request = text_of(seen.recv().unwrap());
+    assert!(request.starts_with("POST /v1/tools/asr"), "{request}");
+    assert!(request.contains(r#"name="file""#), "{request}");
+    assert!(!request.contains(r#"name="model""#), "{request}");
+    assert!(!request.contains(r#"name="language""#), "{request}");
+    assert!(!r.stt[0].languages().can_detect);
+}
+
+#[test]
+fn a_cloud_service_needs_a_key_and_shares_it() {
+    let mut r = Registry::default();
+    openlang_provider_openai::add(&mut r, service("deepseek"));
+    let job = |key| Job {
+        options: options(&[("key", key)]),
+        ..job("", key)
+    };
+    for p in [
+        r.translators[0].as_ref() as &dyn Provider,
+        r.stt[0].as_ref(),
+    ] {
+        assert_eq!(p.descriptor().id, "deepseek");
+        assert_eq!(p.location(&job("").options), Location::Network);
+        assert!(matches!(
+            p.readiness(&job("")),
+            Readiness::NeedsAction { message } if message.contains("DeepSeek API key")
+        ));
+        assert_eq!(p.readiness(&job("k")), Readiness::Ready);
+    }
+}
+
+#[test]
+fn every_service_is_well_formed() {
+    let r = registry();
+    for p in r.translators.iter() {
+        openlang_contract::descriptor(p.as_ref());
+    }
+    for p in r.stt.iter() {
+        openlang_contract::descriptor(p.as_ref());
+    }
+    for s in SERVICES.iter().filter_map(|s| s.translate) {
+        let extra: serde_json::Value = serde_json::from_str(s.extra).unwrap();
+        assert!(extra.is_object(), "{}", s.extra);
+    }
+}
+
+#[test]
+fn openai_hears_and_reads_the_detected_language() {
+    let (base, seen) = serve(
+        "200 OK",
+        r#"{"text":"bonjour","languages":[{"code":"fr"}]}"#,
+    );
+    let r = moved("openai", &base);
+    let job = Job {
+        options: options(&[("key", "k")]),
+        ..job(&base, "k")
+    };
+    let heard = hear(r.stt[0].as_ref(), &job);
+    assert_eq!(heard[0].text, "bonjour");
+    assert_eq!(heard[0].language.as_deref(), Some("fr"));
+    let request = text_of(seen.recv().unwrap());
+    assert!(
+        request.starts_with("POST /audio/transcriptions"),
+        "{request}"
+    );
+    assert!(request.contains("gpt-transcribe"), "{request}");
 }

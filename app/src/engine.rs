@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use openlang_core::{
     Error, Result,
+    auto_language::to_prepare,
     domain::{EventBody, SessionEvent},
     ports::{EventSink, Job, Provider, Readiness, SecretStore},
     registry::{Registry, check_consent},
@@ -125,7 +126,8 @@ impl Engine {
         if let Some(c) = plan.stt.first() {
             let p = self.registry.stt(&c.id)?;
             check_consent(p.as_ref(), &c.options, plan.allow_network)?;
-            self.prepare(p.as_ref(), &job(&c.options))?;
+            let job = job(&c.options);
+            self.prepare(to_prepare(p.as_ref(), self.detector(), &job), &job)?;
         }
         if let Some(c) = plan.translators.first() {
             let p = self.registry.translator(&c.id)?;
@@ -138,6 +140,13 @@ impl Engine {
             vec![Arc::new(Windows(self.app.clone()))],
             &[],
         )
+    }
+
+    pub fn detector(&self) -> Option<&dyn Provider> {
+        self.registry
+            .detector
+            .as_deref()
+            .map(|d| d as &dyn Provider)
     }
 
     fn prepare(&self, provider: &dyn Provider, job: &Job) -> Result<()> {

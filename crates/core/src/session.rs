@@ -142,7 +142,10 @@ impl Session {
             let audio = b.root(Box::new(TransformNode::new(
                 resampler.create(AudioFormat::SPEECH),
             )))?;
-            let transcript = b.add(Box::new(SttNode::new(stt.clone(), origin)), &[audio])?;
+            let transcript = b.add(
+                Box::new(SttNode::new(stt.clone(), registry.detector.clone(), origin)),
+                &[audio],
+            )?;
             let translation = b.add(
                 Box::new(TranslateNode::new(
                     translators.clone(),
@@ -209,6 +212,7 @@ impl Session {
             clock,
             silent_for: Duration::ZERO,
             silent: false,
+            level: 0.0,
         };
         let input = graph.input();
         let pump = std::thread::spawn(move || pump.run(&input));
@@ -247,6 +251,22 @@ struct Pump {
     clock: Instant,
     silent_for: Duration,
     silent: bool,
+    level: f32,
+}
+
+/// Room noise and quieter, in dBFS. It counts as quiet.
+const NOISE_FLOOR: f32 = -50.0;
+/// Loud speech or music, in dBFS. It fills the scale.
+const LOUD: f32 = -10.0;
+
+/// Loudness of a chunk from 0 to 1, from its RMS between `NOISE_FLOOR` and `LOUD`.
+pub fn loudness(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let power = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+    let decibels = 10.0 * power.max(1e-12).log10();
+    ((decibels - NOISE_FLOOR) / (LOUD - NOISE_FLOOR)).clamp(0.0, 1.0)
 }
 
 impl Pump {
@@ -314,6 +334,12 @@ impl Pump {
         if silent != self.silent {
             self.silent = silent;
             self.send(EventBody::Silent { origin, silent });
+        }
+        // Quiet after quiet sends nothing, so an idle session stays idle.
+        let level = loudness(&samples);
+        if level > 0.0 || self.level > 0.0 {
+            self.level = level;
+            self.send(EventBody::Level { origin, level });
         }
         let at = self.clock.elapsed().saturating_sub(length);
         input.emit(Packet::Audio(Arc::new(AudioChunk {
