@@ -1,7 +1,11 @@
 //! Thin graph nodes around the ports.
 
 use std::{
-    sync::{Arc, Mutex, PoisonError},
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex, PoisonError,
+        mpsc::{Sender, channel},
+    },
     time::{Duration, Instant},
 };
 
@@ -9,7 +13,7 @@ use crate::{
     Error, Result,
     auto_language::{AutoLanguage, needs_detector},
     domain::*,
-    graph::{Emitter, Node, QueuePolicy},
+    graph::{Emitter, Node, QueuePolicy, lock},
     ports::*,
     stabilizer::Stabilizer,
 };
@@ -241,36 +245,42 @@ impl Node for SttNode {
     }
 }
 
-pub struct TranslateNode {
+/// Translators in order of preference: a failing one hands the text to the next.
+struct TranslatorChain {
     providers: Vec<(Arc<dyn Translator>, Job)>,
     target: String,
-    interval: Duration,
     active: usize,
     session: Option<Box<dyn TranslatorSession>>,
-    next: Option<Instant>,
-    out: Option<Emitter>,
 }
 
-impl TranslateNode {
-    /// `interval` is the shortest time between two translations of unfinished speech.
-    pub fn new(
-        providers: Vec<(Arc<dyn Translator>, Job)>,
-        target: String,
-        interval: Duration,
-    ) -> Self {
+impl TranslatorChain {
+    fn new(providers: Vec<(Arc<dyn Translator>, Job)>, target: String) -> Self {
         Self {
             providers,
             target,
-            interval,
             active: 0,
             session: None,
-            next: None,
-            out: None,
         }
     }
 
-    /// Failures of unfinished speech are not reported: the final retries and reports them.
-    fn translate(&mut self, text: &str, source: &str, report: bool) -> Result<String> {
+    /// The same translators with sessions of their own.
+    fn twin(&self) -> Self {
+        Self::new(self.providers.clone(), self.target.clone())
+    }
+
+    /// Opening early lets a provider load its model before the first word. A failure is not
+    /// final: it is tried again, with fallbacks, on the first text.
+    fn warm_up(&mut self) {
+        if let Some((provider, job)) = self.providers.first()
+            && let Some(source) = &job.source
+            && primary(source) != primary(&self.target)
+        {
+            self.session = provider.open(job).ok();
+        }
+    }
+
+    /// Every failure goes to `report`, when there is one.
+    fn translate(&mut self, text: &str, source: &str, report: Option<&Emitter>) -> Result<String> {
         if primary(source) == primary(&self.target) {
             return Ok(text.to_owned());
         }
@@ -295,8 +305,8 @@ impl TranslateNode {
                 Ok(t) => return Ok(t),
                 Err(e) => {
                     self.session = None;
-                    if report {
-                        started(&self.out)?.report(e.clone());
+                    if let Some(out) = report {
+                        out.report(e.clone());
                     }
                     last = e;
                 }
@@ -305,6 +315,103 @@ impl TranslateNode {
         // Start from the preferred provider again next time.
         self.active = 0;
         Err(last)
+    }
+}
+
+fn translation(t: &Transcript, language: &str, text: String) -> Packet {
+    Packet::Translation(Arc::new(Translation {
+        segment: t.segment.clone(),
+        source: t.text.clone(),
+        language: language.to_owned(),
+        text,
+    }))
+}
+
+/// Segments whose final the partial worker must not replace, and whether it may still emit.
+#[derive(Default)]
+struct Delivery {
+    ended: VecDeque<SegmentId>,
+    closed: bool,
+}
+
+/// Ended segments remembered. A partial translation is never this many segments late.
+const ENDED_KEPT: usize = 16;
+
+/// Translates unfinished speech on its own thread with its own translators, so a final never
+/// waits for a partial. A busy worker skips to the newest partial.
+struct PartialWorker {
+    jobs: Sender<Arc<Transcript>>,
+    delivery: Arc<Mutex<Delivery>>,
+}
+
+impl PartialWorker {
+    fn start(mut chain: TranslatorChain, out: Emitter) -> Self {
+        let (jobs, queue) = channel::<Arc<Transcript>>();
+        let delivery = Arc::new(Mutex::new(Delivery::default()));
+        let shared = delivery.clone();
+        std::thread::spawn(move || {
+            chain.warm_up();
+            while let Ok(mut t) = queue.recv() {
+                while let Ok(newer) = queue.try_recv() {
+                    t = newer;
+                }
+                // Not reported: the final retries and reports it.
+                let Ok(text) = chain.translate(&t.text, &t.language, None) else {
+                    continue;
+                };
+                let delivery = lock(&shared);
+                if delivery.closed {
+                    return;
+                }
+                if !delivery.ended.contains(&t.segment.id) {
+                    out.emit(translation(&t, &chain.target, text));
+                }
+            }
+        });
+        Self { jobs, delivery }
+    }
+
+    fn send(&self, partial: Arc<Transcript>) {
+        let _ = self.jobs.send(partial);
+    }
+
+    /// Called before the final of `segment` is emitted, so no partial can follow it.
+    fn ended(&self, segment: SegmentId) {
+        let mut delivery = lock(&self.delivery);
+        delivery.ended.push_back(segment);
+        if delivery.ended.len() > ENDED_KEPT {
+            delivery.ended.pop_front();
+        }
+    }
+
+    /// Nothing is emitted once this returns. A translation still running ends on its own.
+    fn close(&self) {
+        lock(&self.delivery).closed = true;
+    }
+}
+
+pub struct TranslateNode {
+    finals: TranslatorChain,
+    partials: Option<PartialWorker>,
+    interval: Duration,
+    next: Option<Instant>,
+    out: Option<Emitter>,
+}
+
+impl TranslateNode {
+    /// `interval` is the shortest time between two translations of unfinished speech.
+    pub fn new(
+        providers: Vec<(Arc<dyn Translator>, Job)>,
+        target: String,
+        interval: Duration,
+    ) -> Self {
+        Self {
+            finals: TranslatorChain::new(providers, target),
+            partials: None,
+            interval,
+            next: None,
+            out: None,
+        }
     }
 }
 
@@ -330,38 +437,37 @@ impl Node for TranslateNode {
         self.next
     }
     fn start(&mut self, out: Emitter) -> Result<()> {
+        self.finals.warm_up();
+        self.partials = Some(PartialWorker::start(self.finals.twin(), out.clone()));
         self.out = Some(out);
-        // Opening early lets a provider load its model before the first word. A failure is not
-        // final: it is tried again, with fallbacks, on the first transcript.
-        if let Some((provider, job)) = self.providers.first()
-            && let Some(source) = &job.source
-            && primary(source) != primary(&self.target)
-        {
-            self.session = provider.open(job).ok();
-        }
         Ok(())
     }
     fn handle(&mut self, packet: Packet) -> Result<()> {
-        let Packet::Transcript(t) = packet else {
+        let (Packet::Transcript(t), Some(partials)) = (packet, &self.partials) else {
             return Ok(());
         };
-        let is_final = t.segment.is_final;
+        if !t.segment.is_final {
+            self.next = Some(Instant::now() + self.interval);
+            partials.send(t);
+            return Ok(());
+        }
         // A new segment's first partial is not held back by the previous one.
-        self.next = (!is_final).then(|| Instant::now() + self.interval);
-        let text = match self.translate(&t.text, &t.language, is_final) {
-            Ok(text) => text,
+        self.next = None;
+        let out = started(&self.out)?;
+        let text = self
+            .finals
+            .translate(&t.text, &t.language, Some(out))
             // Already reported. The original text closes the segment, so no stale partial
             // translation stays on screen.
-            Err(_) if is_final => t.text.clone(),
-            // The original text is still on screen, so keep going.
-            Err(_) => return Ok(()),
-        };
-        started(&self.out)?.emit(Packet::Translation(Arc::new(Translation {
-            segment: t.segment.clone(),
-            source: t.text.clone(),
-            language: self.target.clone(),
-            text,
-        })));
+            .unwrap_or_else(|_| t.text.clone());
+        partials.ended(t.segment.id);
+        out.emit(translation(&t, &self.finals.target, text));
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<()> {
+        if let Some(partials) = &self.partials {
+            partials.close();
+        }
         Ok(())
     }
 }
