@@ -52,15 +52,37 @@ extern "C" fn on_audio(
     Default::default()
 }
 
+/// What the listeners need: who to tell, and the output rate the capture was opened at.
+struct Watch {
+    invalidator: Invalidator,
+    rate: f64,
+}
+
 extern "C-unwind" fn on_output_changed(
     _object: ca::Obj,
     _count: u32,
     _addresses: *const ca::PropAddr,
-    invalidator: *mut Invalidator,
+    watch: *mut Watch,
 ) -> os::Status {
-    // SAFETY: the listener is removed before the invalidator is freed.
-    if let Some(i) = unsafe { invalidator.as_ref() } {
-        i.invalidate();
+    // SAFETY: the listener is removed before the watch is freed.
+    if let Some(w) = unsafe { watch.as_ref() } {
+        w.invalidator.invalidate();
+    }
+    Default::default()
+}
+
+/// Reopens only when the rate really differs, so a notification without a change cannot loop.
+extern "C-unwind" fn on_rate_changed(
+    object: ca::Obj,
+    _count: u32,
+    _addresses: *const ca::PropAddr,
+    watch: *mut Watch,
+) -> os::Status {
+    // SAFETY: the listener is removed before the watch is freed.
+    if let Some(w) = unsafe { watch.as_ref() }
+        && ca::Device(object).nominal_sample_rate().ok() != Some(w.rate)
+    {
+        w.invalidator.invalidate();
     }
     Default::default()
 }
@@ -83,7 +105,7 @@ struct Running {
     _writer: Box<AudioWriter>,
     /// The output device the aggregate is built on.
     output: ca::Device,
-    invalidator: *mut Invalidator,
+    watch: *mut Watch,
 }
 
 // SAFETY: Core Audio objects are plain handles and the raw pointer is owned by this struct.
@@ -93,17 +115,14 @@ impl Capture for Running {}
 impl Drop for Running {
     fn drop(&mut self) {
         self.started = None;
-        let removed = ca::System::OBJ.remove_prop_listener(
-            &output_address(),
-            on_output_changed,
-            self.invalidator,
-        );
+        let removed =
+            ca::System::OBJ.remove_prop_listener(&output_address(), on_output_changed, self.watch);
         let rate_removed =
             self.output
-                .remove_prop_listener(&rate_address(), on_output_changed, self.invalidator);
+                .remove_prop_listener(&rate_address(), on_rate_changed, self.watch);
         if removed.is_ok() && rate_removed.is_ok() {
             // SAFETY: created by Box::into_raw and no longer reachable by Core Audio.
-            drop(unsafe { Box::from_raw(self.invalidator) });
+            drop(unsafe { Box::from_raw(self.watch) });
         }
     }
 }
@@ -176,21 +195,24 @@ impl AudioSource for SystemAudio {
         let proc_id = device
             .create_io_proc_id(on_audio, Some(writer.as_mut()))
             .map_err(failed("audio callback"))?;
-        let invalidator = Box::into_raw(Box::new(invalidator));
+        let rate = output
+            .nominal_sample_rate()
+            .map_err(failed("output rate"))?;
+        let watch = Box::into_raw(Box::new(Watch { invalidator, rate }));
         let mut running = Running {
             started: None,
             _tap: tap,
             _writer: writer,
             output,
-            invalidator,
+            watch,
         };
-        // On failure, drop removes what was added; the invalidator is leaked, not freed, unless
+        // On failure, drop removes what was added; the watch is leaked, not freed, unless
         // both listeners are removed.
         ca::System::OBJ
-            .add_prop_listener(&output_address(), on_output_changed, invalidator)
+            .add_prop_listener(&output_address(), on_output_changed, watch)
             .map_err(failed("output listener"))?;
         output
-            .add_prop_listener(&rate_address(), on_output_changed, invalidator)
+            .add_prop_listener(&rate_address(), on_rate_changed, watch)
             .map_err(failed("sample rate listener"))?;
         let started = ca::device_start(device, Some(proc_id)).map_err(failed("start capture"))?;
         running.started = Some(Box::new(started));
