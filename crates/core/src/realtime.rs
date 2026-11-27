@@ -95,7 +95,7 @@ pub fn channel(format: AudioFormat, seconds: usize) -> (AudioWriter, AudioReader
     (
         AudioWriter {
             ring: producer,
-            channels: format.channels as usize,
+            channels: usize::from(format.channels.max(1)),
             shared: shared.clone(),
         },
         AudioReader {
