@@ -270,7 +270,14 @@ fn work(
                 partial = Some(cut);
             }
         }
-        let partial = partial.filter(|_| took < partial_every).map(Job::from);
+        // A slow engine skips one partial; the next one tries again.
+        let partial = match partial {
+            Some(_) if took >= partial_every => {
+                took = Duration::ZERO;
+                None
+            }
+            partial => partial.map(Job::from),
+        };
         for job in merge(finals).into_iter().chain(partial) {
             let began = Instant::now();
             out(recognize(&mut recognizer, &job));
