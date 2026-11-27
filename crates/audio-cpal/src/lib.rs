@@ -25,8 +25,69 @@ pub fn register(registry: &mut Registry) {
 
 struct Microphone(Descriptor);
 
-struct Running(#[allow(dead_code)] Stream);
+struct Running {
+    #[cfg(target_os = "macos")]
+    _default: default_input::Watch,
+    _stream: Stream,
+}
 impl Capture for Running {}
+
+/// cpal on macOS follows a new default output device but not a new default input: switching the
+/// system mic while the old one stays connected would keep capturing the old one. The session
+/// reopens on the new one instead.
+#[cfg(target_os = "macos")]
+mod default_input {
+    use cidre::{core_audio as ca, os};
+    use openlang_core::{Error, Result, realtime::Invalidator};
+
+    extern "C-unwind" fn on_changed(
+        _object: ca::Obj,
+        _count: u32,
+        _addresses: *const ca::PropAddr,
+        invalidator: *mut Invalidator,
+    ) -> os::Status {
+        // SAFETY: the listener is removed before the invalidator is freed.
+        if let Some(i) = unsafe { invalidator.as_ref() } {
+            i.invalidate();
+        }
+        Default::default()
+    }
+
+    fn address() -> ca::PropAddr {
+        ca::PropSelector::HW_DEFAULT_INPUT_DEVICE.global_addr()
+    }
+
+    pub struct Watch(*mut Invalidator);
+
+    // SAFETY: the raw pointer is owned by this struct.
+    unsafe impl Send for Watch {}
+
+    impl Watch {
+        pub fn new(invalidator: Invalidator) -> Result<Self> {
+            let invalidator = Box::into_raw(Box::new(invalidator));
+            match ca::System::OBJ.add_prop_listener(&address(), on_changed, invalidator) {
+                Ok(()) => Ok(Self(invalidator)),
+                Err(e) => {
+                    // SAFETY: created above and never handed to Core Audio.
+                    drop(unsafe { Box::from_raw(invalidator) });
+                    Err(Error::Device(format!("default input listener: {e:?}")))
+                }
+            }
+        }
+    }
+
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            if ca::System::OBJ
+                .remove_prop_listener(&address(), on_changed, self.0)
+                .is_ok()
+            {
+                // SAFETY: created by Box::into_raw and no longer reachable by Core Audio.
+                drop(unsafe { Box::from_raw(self.0) });
+            }
+        }
+    }
+}
 
 fn failed(e: cpal::Error) -> Error {
     match e.kind() {
@@ -70,6 +131,7 @@ impl AudioSource for Microphone {
     }
 
     fn open(&self) -> Result<(AudioReader, Box<dyn Capture>)> {
+        // Capture always follows the default input.
         let device = cpal::default_host()
             .default_input_device()
             .ok_or_else(|| Error::Device("no microphone found".into()))?;
@@ -79,6 +141,8 @@ impl AudioSource for Microphone {
             channels: supported.channels(),
         };
         let (writer, reader) = realtime::channel(format, 4);
+        #[cfg(target_os = "macos")]
+        let default = default_input::Watch::new(writer.invalidator())?;
         let sample_format = supported.sample_format();
         let config = supported.into();
         let stream = match sample_format {
@@ -89,6 +153,13 @@ impl AudioSource for Microphone {
             other => Err(Error::Device(format!("unsupported sample format {other}"))),
         }?;
         stream.play().map_err(failed)?;
-        Ok((reader, Box::new(Running(stream))))
+        Ok((
+            reader,
+            Box::new(Running {
+                #[cfg(target_os = "macos")]
+                _default: default,
+                _stream: stream,
+            }),
+        ))
     }
 }
