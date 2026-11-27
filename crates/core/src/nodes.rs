@@ -12,6 +12,7 @@ use std::{
 use crate::{
     Error, Result,
     auto_language::{AutoLanguage, needs_detector},
+    clauses::Clauses,
     domain::*,
     graph::{Emitter, Node, QueuePolicy, lock},
     ports::*,
@@ -338,7 +339,8 @@ struct Delivery {
 const ENDED_KEPT: usize = 16;
 
 /// Translates unfinished speech on its own thread with its own translators, so a final never
-/// waits for a partial. A busy worker skips to the newest partial.
+/// waits for a partial. A busy worker skips to the newest partial, and translates only the
+/// clauses that changed.
 struct PartialWorker {
     jobs: Sender<Arc<Transcript>>,
     delivery: Arc<Mutex<Delivery>>,
@@ -351,12 +353,15 @@ impl PartialWorker {
         let shared = delivery.clone();
         std::thread::spawn(move || {
             chain.warm_up();
+            let target = chain.target.clone();
+            let mut clauses = Clauses::default();
             while let Ok(mut t) = queue.recv() {
                 while let Ok(newer) = queue.try_recv() {
                     t = newer;
                 }
                 // Not reported: the final retries and reports it.
-                let Ok(text) = chain.translate(&t.text, &t.language, None) else {
+                let translate = |clause: &str| chain.translate(clause, &t.language, None);
+                let Ok(text) = clauses.translate(t.segment.id, &t.text, &target, translate) else {
                     continue;
                 };
                 let delivery = lock(&shared);
@@ -364,7 +369,7 @@ impl PartialWorker {
                     return;
                 }
                 if !delivery.ended.contains(&t.segment.id) {
-                    out.emit(translation(&t, &chain.target, text));
+                    out.emit(translation(&t, &target, text));
                 }
             }
         });

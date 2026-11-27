@@ -42,7 +42,7 @@ Test notes:
 - Every node runs on its own thread behind its own queue.
 - Edges are type-checked when the graph is built, and inputs must already exist, so there are no cycles.
 - `QueuePolicy::Coalesce` replaces a queued partial with a newer one of the same segment; finals are never dropped. `Node::ready_at` throttles partials (`partial_interval`).
-- `TranslateNode` translates finals inline and partials on its own `PartialWorker` thread with a second translator session, so a final never waits for a partial. The worker skips to the newest partial, and drops a partial whose segment's final was already emitted.
+- `TranslateNode` translates finals inline and partials on its own `PartialWorker` thread with a second translator session, so a final never waits for a partial. The worker skips to the newest partial, and drops a partial whose segment's final was already emitted. It translates clause by clause (`core/src/clauses.rs`): a complete clause is translated once, so each partial costs only its growing last clause. Finals are translated whole.
 - A node that errors or panics is reported and stopped. Other branches keep running.
 - `Session::stop` drains finals but is bounded by `Graph::finish_within(STOP_LIMIT)`. Never add an unbounded wait on stop: the "Stop button does nothing" bug came from Apple Speech never finishing when no audio had arrived.
 

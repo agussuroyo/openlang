@@ -151,10 +151,10 @@ pub fn translation(t: &dyn Translator, job: &Job, text: &str) -> String {
     first
 }
 
-/// How long after its words were spoken a final arrived.
+/// Delays of one kind, over `count` updates.
 #[derive(Debug)]
 pub struct Latency {
-    pub finals: usize,
+    pub count: usize,
     pub median: Duration,
     pub max: Duration,
 }
@@ -162,24 +162,35 @@ pub struct Latency {
 impl Latency {
     fn of(mut late: Vec<Duration>) -> Self {
         late.sort();
-        assert!(!late.is_empty(), "no final");
+        assert!(!late.is_empty(), "nothing arrived");
         Self {
-            finals: late.len(),
+            count: late.len(),
             median: late[late.len() / 2],
             max: late[late.len() - 1],
         }
     }
 }
 
-/// Plays `samples` in real time through a whole session, as the app runs it, and measures every
-/// final transcript and final translation. `stress` keeps every core busy meanwhile.
+/// What a listener waits for.
+#[derive(Debug)]
+pub struct Report {
+    /// From the end of speech to its final transcript.
+    pub transcript: Latency,
+    /// From the end of speech to its final translation.
+    pub translation: Latency,
+    /// From an unfinished transcript to its translation.
+    pub partial_lag: Latency,
+}
+
+/// Plays `samples` in real time through a whole session, as the app runs it, and measures what
+/// a listener waits for. `stress` keeps every core busy meanwhile.
 pub fn latency(
     stt: Arc<dyn SpeechToText>,
     translator: Arc<dyn Translator>,
     job: &Job,
     samples: &[f32],
     stress: bool,
-) -> (Latency, Latency) {
+) -> Report {
     make_ready(stt.as_ref(), job);
     make_ready(translator.as_ref(), job);
     let mut registry = Registry::default();
@@ -224,22 +235,36 @@ pub fn latency(
         let _ = b.wait();
     }
     let arrivals = sink.0.lock().unwrap();
-    let late = |translated: bool| {
+    let after_speech = |translated: bool| {
         Latency::of(
             arrivals
                 .iter()
-                .filter(|a| a.2 == translated)
-                .map(|(at, end, _)| at.duration_since(began).saturating_sub(*end))
+                .filter(|a| a.1.is_final && a.2 == translated)
+                .map(|(at, s, _)| at.duration_since(began).saturating_sub(s.end))
                 .collect(),
         )
     };
-    (late(false), late(true))
+    let heard_at = |s: &Segment| {
+        arrivals
+            .iter()
+            .find(|a| !a.2 && a.1.id == s.id && a.1.revision == s.revision)
+            .map(|a| a.0)
+    };
+    let partial_lag = arrivals
+        .iter()
+        .filter(|a| a.2 && !a.1.is_final)
+        .filter_map(|(at, s, _)| Some(at.duration_since(heard_at(s)?)))
+        .collect();
+    Report {
+        transcript: after_speech(false),
+        translation: after_speech(true),
+        partial_lag: Latency::of(partial_lag),
+    }
 }
 
-/// When each final arrived, where its speech ended on the session clock, and whether it is the
-/// translation.
+/// When each transcript and translation arrived, its segment, and whether it is the translation.
 #[derive(Default)]
-struct Arrivals(Mutex<Vec<(Instant, Duration, bool)>>);
+struct Arrivals(Mutex<Vec<(Instant, Segment, bool)>>);
 
 impl EventSink for Arrivals {
     fn accept(&self, event: &SessionEvent) -> Result<()> {
@@ -248,10 +273,8 @@ impl EventSink for Arrivals {
             EventBody::Translation(t) => (&t.segment, true),
             _ => return Ok(()),
         };
-        if segment.is_final {
-            let arrival = (Instant::now(), segment.end, translated);
-            self.0.lock().unwrap().push(arrival);
-        }
+        let arrival = (Instant::now(), segment.clone(), translated);
+        self.0.lock().unwrap().push(arrival);
         Ok(())
     }
 }

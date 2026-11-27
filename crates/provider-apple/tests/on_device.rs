@@ -70,20 +70,22 @@ fn run() {
     };
     let talk = contract::speak(
         "Samantha",
-        "Good morning everyone. [[slnc 900]] Today we will review the project budget. [[slnc 900]] \
-         The first item is travel. [[slnc 900]] Then we look at hiring for next year. [[slnc 900]] \
-         Finally we agree on the dates for the launch.",
+        "Listeners, imagine a friend asks, would you rather have a picnic in the park or watch a \
+         movie at home this Saturday? Choose one now, even if you could go either way. In a \
+         moment, you will pause us and give yourself one minute to answer out loud, explaining \
+         your choice, your reasons, and what you would do there. [[slnc 900]] Last weekend we had \
+         Saturday afternoon free, so we talked about it over breakfast, and in the end we chose \
+         the park, because the weather was perfect and we had not been outside all week.",
     );
     for stress in [false, true] {
-        let (heard, translated) = contract::latency(
+        let report = contract::latency(
             registry.stt("apple-speech").unwrap().clone(),
             registry.translator("apple-translate").unwrap().clone(),
             &job,
             &talk,
             stress,
         );
-        println!("stress {stress}: transcript {heard:?}");
-        println!("stress {stress}: translation {translated:?}");
+        println!("stress {stress}: {report:#?}");
     }
     let bad = Job {
         source: Some("tlh".into()),
