@@ -24,11 +24,17 @@ impl TransformFactory for ToMono {
             fft: None,
             pending: Vec::new(),
             next_at: None,
+            weights: Vec::new(),
         })
     }
 }
 
 const BLOCK: usize = 1024;
+/// A chunk that starts this much later than the samples so far add up to follows lost samples or
+/// a reopened source, so output time is anchored to it again.
+const GAP: Duration = Duration::from_millis(100);
+/// A channel whose RMS is under 1/100 of the loudest one's is left out of the mix.
+const QUIET: f32 = 100.0 * 100.0;
 
 struct MonoResampler {
     output: AudioFormat,
@@ -36,6 +42,8 @@ struct MonoResampler {
     fft: Option<Fft<f32>>,
     pending: Vec<f32>,
     next_at: Option<Duration>,
+    /// Per channel factor of the mix, reused between chunks.
+    weights: Vec<f32>,
 }
 
 fn failed(e: impl std::fmt::Display) -> Error {
@@ -43,12 +51,30 @@ fn failed(e: impl std::fmt::Display) -> Error {
 }
 
 impl MonoResampler {
-    fn mix(chunk: &AudioChunk) -> impl Iterator<Item = f32> + '_ {
+    /// Averages the channels that carry sound in this chunk, so a mic on one input of a
+    /// multichannel interface keeps its level. All silent: plain average.
+    fn weigh(chunk: &AudioChunk, weights: &mut Vec<f32>) {
         let channels = chunk.format.channels.max(1) as usize;
+        weights.clear();
+        weights.resize(channels, 0.0);
+        for frame in chunk.samples.chunks_exact(channels) {
+            for (energy, s) in weights.iter_mut().zip(frame) {
+                *energy += s * s;
+            }
+        }
+        let loudest = weights.iter().copied().fold(0.0, f32::max);
+        let active = weights.iter().filter(|e| **e * QUIET >= loudest).count();
+        let share = 1.0 / active as f32;
+        for w in weights.iter_mut() {
+            *w = if *w * QUIET >= loudest { share } else { 0.0 };
+        }
+    }
+
+    fn mix<'a>(chunk: &'a AudioChunk, weights: &'a [f32]) -> impl Iterator<Item = f32> + 'a {
         chunk
             .samples
-            .chunks_exact(channels)
-            .map(move |f| f.iter().sum::<f32>() / channels as f32)
+            .chunks_exact(weights.len())
+            .map(move |f| f.iter().zip(weights).map(|(s, w)| s * w).sum::<f32>())
     }
 
     fn seconds(samples: usize, rate: u32) -> Duration {
@@ -127,8 +153,22 @@ impl AudioTransform for MonoResampler {
                 )
             };
         }
+        let expected = self
+            .next_at
+            .map(|at| at + Self::seconds(self.pending.len(), self.input_rate));
+        let mut flushed = None;
+        if expected.is_some_and(|e| chunk.at > e + GAP) {
+            // What is waiting keeps its own times; this chunk waits for the next call.
+            let samples = self.convert(true)?;
+            flushed = self.chunk(samples);
+            self.next_at = Some(chunk.at);
+        }
         self.next_at.get_or_insert(chunk.at);
-        self.pending.extend(Self::mix(chunk));
+        Self::weigh(chunk, &mut self.weights);
+        self.pending.extend(Self::mix(chunk, &self.weights));
+        if flushed.is_some() {
+            return Ok(flushed);
+        }
         let samples = self.convert(false)?;
         Ok(self.chunk(samples))
     }
@@ -192,6 +232,47 @@ mod tests {
                 rms(middle)
             );
         }
+    }
+
+    #[test]
+    fn keeps_level_of_one_live_channel() {
+        let mut chunk = tone(48_000, 4, 440.0);
+        for frame in chunk.samples.as_chunks_mut::<4>().0 {
+            frame[1..].fill(0.0);
+        }
+        let out = convert(&chunk);
+        assert!((rms(&out.samples[4_000..12_000]) - 0.707).abs() < 0.02);
+    }
+
+    #[test]
+    fn identical_stereo_is_unchanged() {
+        let chunk = tone(16_000, 2, 440.0);
+        let out = convert(&chunk);
+        let left: Vec<f32> = chunk.samples.iter().step_by(2).copied().collect();
+        assert_eq!(out.samples, left);
+    }
+
+    #[test]
+    fn anchors_again_after_a_gap() {
+        let mut t = ToMono.create(AudioFormat::SPEECH);
+        let first = tone(48_000, 1, 440.0);
+        let out = t.process(&first).unwrap().unwrap();
+        assert_eq!(out.at, Duration::from_secs(5));
+        let mut late = first.clone();
+        late.at = Duration::from_secs(8);
+        let tail = t.process(&late).unwrap().unwrap();
+        let seconds = |n: usize| Duration::from_secs_f64(n as f64 / 16_000.0);
+        assert_eq!(tail.at, out.at + seconds(out.samples.len()));
+        let next = t.flush().unwrap().unwrap();
+        assert_eq!(next.at, Duration::from_secs(8));
+
+        // Without a gap, time follows the samples.
+        let mut t = ToMono.create(AudioFormat::SPEECH);
+        let out = t.process(&tone(16_000, 1, 440.0)).unwrap().unwrap();
+        let mut on_time = tone(16_000, 1, 440.0);
+        on_time.at = Duration::from_millis(6_050);
+        let next = t.process(&on_time).unwrap().unwrap();
+        assert_eq!(next.at, out.at + seconds(out.samples.len()));
     }
 
     #[test]

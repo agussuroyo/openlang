@@ -16,6 +16,7 @@ struct Shared {
 /// Safe to use inside a realtime callback: never allocates, locks or blocks.
 pub struct AudioWriter {
     ring: rtrb::Producer<f32>,
+    channels: usize,
     shared: Arc<Shared>,
 }
 
@@ -26,7 +27,8 @@ impl AudioWriter {
 
     pub fn write_iter(&mut self, samples: impl ExactSizeIterator<Item = f32>) {
         let total = samples.len();
-        let room = self.ring.slots().min(total);
+        // Whole frames only, so a nearly full ring never shifts the channels.
+        let room = self.ring.slots().min(total) / self.channels * self.channels;
         let mut lost = total - room;
         if room > 0 {
             match self.ring.write_chunk_uninit(room) {
@@ -93,6 +95,7 @@ pub fn channel(format: AudioFormat, seconds: usize) -> (AudioWriter, AudioReader
     (
         AudioWriter {
             ring: producer,
+            channels: usize::from(format.channels.max(1)),
             shared: shared.clone(),
         },
         AudioReader {
@@ -133,5 +136,20 @@ mod tests {
         );
         w.write(&[1.0, 2.0, 3.0]);
         assert_eq!(r.read(16), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn a_full_ring_keeps_channels_aligned() {
+        let (mut w, mut r) = channel(
+            AudioFormat {
+                sample_rate: 2,
+                channels: 2,
+            },
+            1,
+        );
+        w.write(&[1.0, 2.0, 3.0]);
+        w.write(&[4.0, 5.0, 6.0, 7.0]);
+        assert_eq!(r.read(16), vec![1.0, 2.0, 4.0, 5.0]);
+        assert_eq!(r.take_lost(), 3);
     }
 }

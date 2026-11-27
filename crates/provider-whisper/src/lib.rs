@@ -86,7 +86,9 @@ fn failed(e: whisper_rs::WhisperError) -> Error {
 }
 
 fn load(model: &Path) -> Result<WhisperState> {
-    WhisperContext::new_with_params(model, WhisperContextParameters::default())
+    let mut params = WhisperContextParameters::default();
+    params.flash_attn(true);
+    WhisperContext::new_with_params(model, params)
         .map_err(failed)?
         .create_state()
         .map_err(failed)
@@ -101,7 +103,11 @@ impl SpeechToText for Whisper {
             .as_deref()
             .map(|tag| openlang_core::nodes::primary(tag).to_owned());
         Ok(Box::new(ChunkedSession::new(
-            Listen { state, language },
+            Listen {
+                state,
+                language,
+                heard: None,
+            },
             out,
             Some(Duration::from_millis(1200)),
         )))
@@ -111,13 +117,18 @@ impl SpeechToText for Whisper {
 struct Listen {
     state: WhisperState,
     language: Option<String>,
+    /// Detected for the current utterance, when no language is fixed.
+    heard: Option<String>,
 }
 
 /// Whisper rejects anything shorter than a second.
 const SHORTEST: usize = 17_600;
+/// Enough sound to trust the detected language for the rest of the utterance.
+const DETECT_AFTER: usize = 16_000 * 3;
 
 impl Recognizer for Listen {
-    fn recognize(&mut self, samples: &[f32]) -> Result<Heard> {
+    fn recognize(&mut self, samples: &[f32], is_final: bool) -> Result<Heard> {
+        let heard_enough = samples.len() >= DETECT_AFTER;
         let mut padded;
         let samples = if samples.len() < SHORTEST {
             padded = samples.to_vec();
@@ -127,7 +138,9 @@ impl Recognizer for Listen {
             samples
         };
         let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        p.set_language(Some(self.language.as_deref().unwrap_or("auto")));
+        // Detecting runs the encoder twice, and partials of one utterance must not switch language.
+        let known = self.language.clone().or_else(|| self.heard.clone());
+        p.set_language(Some(known.as_deref().unwrap_or("auto")));
         p.set_n_threads(4);
         p.set_no_context(true);
         p.set_suppress_nst(true);
@@ -144,10 +157,16 @@ impl Recognizer for Listen {
             .filter(|s| s.no_speech_probability() < 0.6)
             .map(|s| s.to_string())
             .collect();
-        let language = match &self.language {
-            Some(_) => None,
-            None => get_lang_str(self.state.full_lang_id_from_state()).map(str::to_owned),
+        let language = match (&self.language, known) {
+            (Some(_), _) => None,
+            (None, Some(heard)) => Some(heard),
+            (None, None) => get_lang_str(self.state.full_lang_id_from_state()).map(str::to_owned),
         };
+        if is_final {
+            self.heard = None;
+        } else if heard_enough {
+            self.heard.clone_from(&language);
+        }
         Ok(Heard { text, language })
     }
 }

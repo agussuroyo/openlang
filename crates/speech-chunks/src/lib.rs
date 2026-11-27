@@ -21,8 +21,8 @@ pub struct Heard {
 }
 
 pub trait Recognizer: Send + 'static {
-    /// 16 kHz mono.
-    fn recognize(&mut self, samples: &[f32]) -> Result<Heard>;
+    /// 16 kHz mono. `is_final` is the last call for this utterance; the next call starts a new one.
+    fn recognize(&mut self, samples: &[f32], is_final: bool) -> Result<Heard>;
 }
 
 const RATE: usize = AudioFormat::SPEECH.sample_rate as usize;
@@ -31,6 +31,10 @@ const PRE_ROLL: usize = RATE * 3 / 10;
 const PAUSE_FRAMES: usize = 30;
 const MIN_SPEECH_FRAMES: usize = 8;
 const LONGEST: usize = RATE * 12;
+/// A long utterance is cut at the quietest frame of its last stretch, so words stay whole.
+const LOOK_BACK: usize = RATE * 3 / 2 / FRAME;
+/// The noise floor rises to the quietest frame of this stretch, so steady music becomes background.
+const NOISE_WINDOW: usize = RATE * 3 / 2 / FRAME;
 /// Quieter than this is never speech, whatever the noise floor.
 const FLOOR: f32 = 0.004;
 
@@ -45,10 +49,12 @@ pub fn has_speech(samples: &[f32]) -> bool {
     loud * FRAME >= RATE
 }
 
+/// Samples that end at `end` samples into the stream.
 #[derive(Debug, PartialEq)]
-enum Cut {
-    Partial(Vec<f32>),
-    Final(Vec<f32>),
+struct Cut {
+    samples: Vec<f32>,
+    end: usize,
+    is_final: bool,
 }
 
 /// Energy-based: speech is what stands clearly above a slowly adapting noise floor.
@@ -57,6 +63,8 @@ struct Cutter {
     before: VecDeque<f32>,
     speech: Vec<f32>,
     noise: f32,
+    /// Levels of the latest frames, up to `NOISE_WINDOW`.
+    recent: VecDeque<f32>,
     quiet: usize,
     voiced: usize,
     partial_every: Option<usize>,
@@ -72,6 +80,7 @@ impl Cutter {
             before: VecDeque::new(),
             speech: Vec::new(),
             noise: FLOOR / 2.0,
+            recent: VecDeque::new(),
             quiet: 0,
             voiced: 0,
             partial_every: partial_every.map(|d| (d.as_secs_f64() * RATE as f64) as usize),
@@ -98,6 +107,12 @@ impl Cutter {
         if !loud {
             self.noise += (level - self.noise) * 0.05;
         }
+        self.recent.push_back(level);
+        if self.recent.len() > NOISE_WINDOW {
+            self.recent.pop_front();
+            let quietest = self.recent.iter().copied().fold(f32::MAX, f32::min);
+            self.noise = self.noise.max(quietest);
+        }
         if self.speech.is_empty() {
             if !loud {
                 self.before.extend(frame);
@@ -111,14 +126,21 @@ impl Cutter {
         self.since_partial += FRAME;
         self.voiced += usize::from(loud);
         self.quiet = if loud { 0 } else { self.quiet + 1 };
-        if self.quiet >= PAUSE_FRAMES || self.speech.len() >= LONGEST {
+        if self.quiet >= PAUSE_FRAMES {
             return self.finish();
+        }
+        if self.speech.len() >= LONGEST {
+            return self.cut_long();
         }
         if self.voiced >= MIN_SPEECH_FRAMES
             && self.partial_every.is_some_and(|n| self.since_partial >= n)
         {
             self.since_partial = 0;
-            return Some(Cut::Partial(self.speech.clone()));
+            return Some(Cut {
+                samples: self.speech.clone(),
+                end: self.position,
+                is_final: false,
+            });
         }
         None
     }
@@ -128,19 +150,43 @@ impl Cutter {
         let voiced = std::mem::take(&mut self.voiced);
         self.quiet = 0;
         self.since_partial = 0;
-        (voiced >= MIN_SPEECH_FRAMES).then_some(Cut::Final(speech))
+        (voiced >= MIN_SPEECH_FRAMES).then_some(Cut {
+            samples: speech,
+            end: self.position,
+            is_final: true,
+        })
     }
-}
 
-struct Utterance {
-    samples: Vec<f32>,
-    end: usize,
-    is_final: bool,
+    /// Ends the utterance after its quietest recent frame; what follows starts the next one.
+    fn cut_long(&mut self) -> Option<Cut> {
+        let frames = self.speech.len() / FRAME;
+        let from = frames.saturating_sub(LOOK_BACK);
+        let quietest = (from..frames)
+            .min_by(|a, b| {
+                let level = |i: usize| level(&self.speech[i * FRAME..(i + 1) * FRAME]);
+                level(*a).total_cmp(&level(*b))
+            })
+            .unwrap_or(frames - 1);
+        let rest = self.speech.split_off((quietest + 1) * FRAME);
+        let threshold = (self.noise * 3.0).max(FLOOR);
+        let rest_voiced = rest.chunks(FRAME).filter(|f| level(f) > threshold).count();
+        let end = self.position - rest.len();
+        let quiet = self.quiet.min(rest.len() / FRAME);
+        self.voiced = self.voiced.saturating_sub(rest_voiced);
+        let mut cut = self.finish();
+        if let Some(cut) = &mut cut {
+            cut.end = end;
+        }
+        self.speech = rest;
+        self.voiced = rest_voiced;
+        self.quiet = quiet;
+        cut
+    }
 }
 
 pub struct ChunkedSession {
     cutter: Cutter,
-    jobs: Option<Sender<Utterance>>,
+    jobs: Option<Sender<Cut>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -161,26 +207,14 @@ impl ChunkedSession {
     }
 
     fn send(&self, cut: Cut) -> Result<()> {
-        let end = self.cutter.position;
-        let (samples, is_final) = match cut {
-            Cut::Partial(s) => (s, false),
-            Cut::Final(s) => (s, true),
-        };
         self.jobs
             .as_ref()
-            .and_then(|j| {
-                j.send(Utterance {
-                    samples,
-                    end,
-                    is_final,
-                })
-                .ok()
-            })
+            .and_then(|j| j.send(cut).ok())
             .ok_or_else(|| Error::Provider("recognizer stopped".into()))
     }
 }
 
-fn work(mut recognizer: impl Recognizer, queue: &Receiver<Utterance>, out: &SttOutput) {
+fn work(mut recognizer: impl Recognizer, queue: &Receiver<Cut>, out: &SttOutput) {
     while let Ok(mut job) = queue.recv() {
         // An engine slower than real time skips partials but never a finished utterance.
         while !job.is_final {
@@ -190,13 +224,15 @@ fn work(mut recognizer: impl Recognizer, queue: &Receiver<Utterance>, out: &SttO
             }
         }
         let seconds = |n: usize| Duration::from_secs_f64(n as f64 / RATE as f64);
-        let result = recognizer.recognize(&job.samples).map(|h| SttUpdate {
-            text: h.text.trim().to_owned(),
-            language: h.language,
-            start: seconds(job.end.saturating_sub(job.samples.len())),
-            end: seconds(job.end),
-            is_final: job.is_final,
-        });
+        let result = recognizer
+            .recognize(&job.samples, job.is_final)
+            .map(|h| SttUpdate {
+                text: h.text.trim().to_owned(),
+                language: h.language,
+                start: seconds(job.end.saturating_sub(job.samples.len())),
+                end: seconds(job.end),
+                is_final: job.is_final,
+            });
         out(result);
     }
 }
@@ -235,6 +271,19 @@ mod tests {
     fn silence(ms: usize) -> Vec<f32> {
         vec![0.0005; RATE * ms / 1000]
     }
+    /// Voice with a short dip between words, every 350 ms.
+    fn words(ms: usize) -> Vec<f32> {
+        let word = RATE * 35 / 100;
+        (0..RATE * ms / 1000)
+            .map(|i| {
+                if i % word < word * 4 / 5 {
+                    (i as f32 * 0.2).sin() * 0.3
+                } else {
+                    0.0005
+                }
+            })
+            .collect()
+    }
 
     #[test]
     fn speech_needs_one_loud_second() {
@@ -242,7 +291,7 @@ mod tests {
         assert!(!has_speech(&[silence(2000), voice(900)].concat()));
     }
     fn finals(c: &[Cut]) -> usize {
-        c.iter().filter(|c| matches!(c, Cut::Final(_))).count()
+        c.iter().filter(|c| c.is_final).count()
     }
 
     #[test]
@@ -267,7 +316,12 @@ mod tests {
     fn keeps_the_start_of_the_first_word() {
         let mut c = Cutter::new(None);
         let cuts = c.push(&[silence(1000), voice(1000), silence(900)].concat());
-        let Some(Cut::Final(s)) = cuts.first() else {
+        let Some(Cut {
+            samples: s,
+            is_final: true,
+            ..
+        }) = cuts.first()
+        else {
             panic!("no utterance")
         };
         assert!(s.len() > RATE * 13 / 10);
@@ -276,14 +330,66 @@ mod tests {
     #[test]
     fn long_speech_is_cut_and_partials_arrive() {
         let mut c = Cutter::new(Some(Duration::from_secs(1)));
-        let cuts = c.push(&voice(25_000));
+        let cuts = c.push(&words(25_000));
         assert_eq!(finals(&cuts), 2);
         assert!(cuts.len() > 10);
     }
 
+    #[test]
+    fn long_speech_is_cut_between_words_without_losing_audio() {
+        let mut c = Cutter::new(None);
+        let audio = words(25_000);
+        let cuts = c.push(&audio);
+        assert_eq!(finals(&cuts), 2);
+        let mut start = 0;
+        for cut in &cuts {
+            assert!(cut.samples.len() <= LONGEST);
+            assert!(cut.samples.len() > LONGEST - LOOK_BACK * FRAME);
+            assert_eq!(cut.end - cut.samples.len(), start, "gap or overlap");
+            assert_eq!(cut.samples, audio[start..cut.end]);
+            let last = &cut.samples[cut.samples.len() - FRAME..];
+            assert!(level(last) < FLOOR, "cut inside a word");
+            start = cut.end;
+        }
+        assert_eq!(c.speech, audio[start..c.position]);
+    }
+
+    #[test]
+    fn pauses_are_found_over_steady_background() {
+        let hum = |i: usize| (i as f32 * 0.05).sin() * 0.028;
+        let mut audio: Vec<f32> = (0..RATE * 3).map(hum).collect();
+        let mut burst_ends = Vec::new();
+        for _ in 0..3 {
+            for (gap, ms) in [(false, 1000), (true, 900)] {
+                let from = audio.len();
+                audio.extend((from..from + RATE * ms / 1000).map(|i| {
+                    hum(i)
+                        + if gap {
+                            0.0
+                        } else {
+                            (i as f32 * 0.2).sin() * 0.3
+                        }
+                }));
+                if !gap {
+                    burst_ends.push(audio.len());
+                }
+            }
+        }
+        let mut c = Cutter::new(None);
+        let cuts: Vec<_> = audio.chunks(777).flat_map(|p| c.push(p)).collect();
+        for b in burst_ends {
+            assert!(
+                cuts.iter()
+                    .any(|c| c.is_final && c.end > b && c.end <= b + RATE * 9 / 10),
+                "no final in the pause after {b}: {:?}",
+                cuts.iter().map(|c| c.end).collect::<Vec<_>>()
+            );
+        }
+    }
+
     struct Slow;
     impl Recognizer for Slow {
-        fn recognize(&mut self, s: &[f32]) -> Result<Heard> {
+        fn recognize(&mut self, s: &[f32], _: bool) -> Result<Heard> {
             std::thread::sleep(Duration::from_millis(30));
             Ok(Heard {
                 text: s.len().to_string(),

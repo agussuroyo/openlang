@@ -105,9 +105,13 @@ impl Session {
             stt.push((p, job(c)));
         }
         let mut translators = Vec::new();
+        let mut partial_interval = plan.partial_interval;
         for c in &plan.translators {
             let p = registry.translator(&c.id)?.clone();
             check_consent(p.as_ref(), &c.options, plan.allow_network)?;
+            if p.location(&c.options) == Location::Network {
+                partial_interval = partial_interval.max(NETWORK_PARTIAL_INTERVAL);
+            }
             translators.push((p, job(c)));
         }
         let sources = plan
@@ -150,7 +154,7 @@ impl Session {
                 Box::new(TranslateNode::new(
                     translators.clone(),
                     plan.target_language.clone(),
-                    plan.partial_interval,
+                    partial_interval,
                 )),
                 &[transcript],
             )?;
@@ -213,6 +217,8 @@ impl Session {
             silent_for: Duration::ZERO,
             silent: false,
             level: 0.0,
+            peak: 0.0,
+            level_at: Instant::now(),
         };
         let input = graph.input();
         let pump = std::thread::spawn(move || pump.run(&input));
@@ -238,7 +244,11 @@ impl Session {
 }
 
 const STOP_LIMIT: Duration = Duration::from_secs(6);
-const TICK: Duration = Duration::from_millis(50);
+const TICK: Duration = Duration::from_millis(20);
+/// Sound bars move at this rate, whatever the tick.
+const LEVEL_EVERY: Duration = Duration::from_millis(50);
+/// Each request to an online translator may cost money, so unfinished speech is sent less often.
+const NETWORK_PARTIAL_INTERVAL: Duration = Duration::from_millis(1500);
 const SILENCE_AFTER: Duration = Duration::from_secs(8);
 const RETRY: Duration = Duration::from_secs(1);
 
@@ -252,6 +262,9 @@ struct Pump {
     silent_for: Duration,
     silent: bool,
     level: f32,
+    /// Loudest chunk since the last `Level` event.
+    peak: f32,
+    level_at: Instant,
 }
 
 /// Room noise and quieter, in dBFS. It counts as quiet.
@@ -336,10 +349,14 @@ impl Pump {
             self.send(EventBody::Silent { origin, silent });
         }
         // Quiet after quiet sends nothing, so an idle session stays idle.
-        let level = loudness(&samples);
-        if level > 0.0 || self.level > 0.0 {
-            self.level = level;
-            self.send(EventBody::Level { origin, level });
+        self.peak = self.peak.max(loudness(&samples));
+        if self.level_at.elapsed() >= LEVEL_EVERY {
+            let level = std::mem::take(&mut self.peak);
+            self.level_at = Instant::now();
+            if level > 0.0 || self.level > 0.0 {
+                self.level = level;
+                self.send(EventBody::Level { origin, level });
+            }
         }
         let at = self.clock.elapsed().saturating_sub(length);
         input.emit(Packet::Audio(Arc::new(AudioChunk {

@@ -5,7 +5,7 @@ use openlang_core::{Error, Result, ports::*};
 use crate::client::{self, Client};
 use crate::services::{Address, Service};
 
-const LANGUAGES: &[&str] = &[
+pub(crate) const LANGUAGES: &[&str] = &[
     "ar", "bn", "cs", "da", "de", "el", "en", "es", "fa", "fi", "fr", "he", "hi", "hu", "id", "it",
     "ja", "jv", "ko", "ms", "nb", "nl", "pl", "pt", "ro", "ru", "su", "sv", "ta", "th", "tl", "tr",
     "uk", "ur", "vi", "zh",

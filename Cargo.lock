@@ -2919,6 +2919,7 @@ dependencies = [
 name = "openlang-audio-cpal"
 version = "0.1.0"
 dependencies = [
+ "cidre",
  "cpal",
  "openlang-core",
 ]

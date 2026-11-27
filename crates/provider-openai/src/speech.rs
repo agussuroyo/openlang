@@ -51,7 +51,7 @@ struct Listen {
 }
 
 impl Recognizer for Listen {
-    fn recognize(&mut self, samples: &[f32]) -> Result<Heard> {
+    fn recognize(&mut self, samples: &[f32], _: bool) -> Result<Heard> {
         let wav = wav(samples);
         match self.api {
             SpeechApi::Whisper => self.whisper(&wav),
@@ -76,9 +76,11 @@ impl Listen {
     }
 
     fn open_ai(&self, model: &str, wav: &[u8]) -> Result<Heard> {
-        let reply = self
-            .client
-            .upload("audio/transcriptions", &[("model", model)], wav)?;
+        let mut fields = vec![("model", model)];
+        if let Some(language) = &self.language {
+            fields.push(("language", language));
+        }
+        let reply = self.client.upload("audio/transcriptions", &fields, wav)?;
         Ok(Heard {
             text: crate::text(&reply["text"])?,
             language: detected(&reply["languages"][0]["code"]),
@@ -94,28 +96,48 @@ impl Listen {
     }
 }
 
+/// Whisper's English names for every language in `server::LANGUAGES`.
+const NAMES: &[(&str, &str)] = &[
+    ("arabic", "ar"),
+    ("bengali", "bn"),
+    ("chinese", "zh"),
+    ("czech", "cs"),
+    ("danish", "da"),
+    ("dutch", "nl"),
+    ("english", "en"),
+    ("finnish", "fi"),
+    ("french", "fr"),
+    ("german", "de"),
+    ("greek", "el"),
+    ("hebrew", "he"),
+    ("hindi", "hi"),
+    ("hungarian", "hu"),
+    ("indonesian", "id"),
+    ("italian", "it"),
+    ("japanese", "ja"),
+    ("javanese", "jv"),
+    ("korean", "ko"),
+    ("malay", "ms"),
+    ("norwegian", "nb"),
+    ("persian", "fa"),
+    ("polish", "pl"),
+    ("portuguese", "pt"),
+    ("romanian", "ro"),
+    ("russian", "ru"),
+    ("spanish", "es"),
+    ("sundanese", "su"),
+    ("swedish", "sv"),
+    ("tagalog", "tl"),
+    ("tamil", "ta"),
+    ("thai", "th"),
+    ("turkish", "tr"),
+    ("ukrainian", "uk"),
+    ("urdu", "ur"),
+    ("vietnamese", "vi"),
+];
+
 /// Servers answer with a code or an English name; only a code is usable.
 fn detected(v: &Value) -> Option<String> {
-    const NAMES: &[(&str, &str)] = &[
-        ("arabic", "ar"),
-        ("chinese", "zh"),
-        ("dutch", "nl"),
-        ("english", "en"),
-        ("french", "fr"),
-        ("german", "de"),
-        ("hindi", "hi"),
-        ("indonesian", "id"),
-        ("italian", "it"),
-        ("japanese", "ja"),
-        ("korean", "ko"),
-        ("malay", "ms"),
-        ("portuguese", "pt"),
-        ("russian", "ru"),
-        ("spanish", "es"),
-        ("thai", "th"),
-        ("turkish", "tr"),
-        ("vietnamese", "vi"),
-    ];
     let name = v.as_str()?.to_lowercase();
     if name.len() == 2 {
         return Some(name);
@@ -148,4 +170,21 @@ fn wav(samples: &[f32]) -> Vec<u8> {
         out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32_767.0) as i16).to_le_bytes());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_language_has_a_name() {
+        for code in crate::server::LANGUAGES {
+            assert!(
+                NAMES.iter().any(|(_, c)| c == code),
+                "no English name for {code}"
+            );
+        }
+        assert_eq!(detected(&Value::from("Norwegian")).as_deref(), Some("nb"));
+        assert_eq!(detected(&Value::from("he")).as_deref(), Some("he"));
+    }
 }
