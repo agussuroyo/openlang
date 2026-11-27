@@ -1,48 +1,84 @@
-//! Unfinished speech translated clause by clause: a clause that is complete is translated once,
-//! so each new partial costs only its last, still growing clause.
+//! Speech translated clause by clause: a complete clause is translated once, so each new partial
+//! costs only its last, still growing clause, and the final only what changed.
 
-use crate::{Result, domain::SegmentId, nodes::primary};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Mutex,
+};
 
-/// Clause translations of the segment being spoken.
+use crate::{Result, domain::SegmentId, graph::lock, nodes::primary};
+
+/// Segments whose clauses are kept: the one being spoken, and those whose final may still be
+/// on its way.
+const SEGMENTS_KEPT: usize = 4;
+
+/// Clause translations of the latest segments, shared by their partials and their final.
 #[derive(Default)]
 pub struct Clauses {
-    segment: Option<SegmentId>,
-    /// Complete clauses and their translations, in order.
-    done: Vec<(String, String)>,
+    segments: Mutex<VecDeque<(SegmentId, HashMap<String, String>)>>,
 }
 
 impl Clauses {
-    /// Translates `text` of `segment` with `translate`, reusing the complete clauses it already
-    /// translated. A clause whose words changed is translated again.
+    /// Translates `text` of `segment`, reusing every clause already translated by an earlier
+    /// call. Translating happens outside the lock, so callers never wait for each other.
+    ///
+    /// Each call to a translator costs a fixed overhead. Unfinished speech still pays it per
+    /// missing clause, so the next partial can reuse each one; a final has no next partial, so
+    /// its missing clauses that follow each other go in one call.
     pub fn translate(
-        &mut self,
+        &self,
         segment: SegmentId,
         text: &str,
         target: &str,
+        is_final: bool,
         mut translate: impl FnMut(&str) -> Result<String>,
     ) -> Result<String> {
-        if self.segment != Some(segment) {
-            self.segment = Some(segment);
-            self.done.clear();
+        // What to ask the translator for, and whether to keep its answer for later calls.
+        enum Part<'a> {
+            Known(String),
+            Ask(&'a str, bool),
         }
-        let mut clauses = split(text);
-        let tail = clauses.pop().unwrap_or_default();
-        let kept = self
-            .done
-            .iter()
-            .zip(&clauses)
-            .take_while(|((source, _), clause)| source == *clause)
-            .count();
-        self.done.truncate(kept);
-        for clause in &clauses[kept..] {
-            let translated = translate(clause)?;
-            self.done.push(((*clause).to_owned(), translated));
+        let mut plan = Vec::new();
+        for clause in split(text) {
+            match (self.get(segment, clause), plan.last_mut()) {
+                (Some(known), _) => plan.push(Part::Known(known)),
+                (None, Some(Part::Ask(asked, false))) => *asked = span(text, asked, clause),
+                (None, _) => plan.push(Part::Ask(clause, !is_final)),
+            }
         }
-        let mut parts: Vec<String> = self.done.iter().map(|(_, t)| t.clone()).collect();
-        if !tail.is_empty() {
-            parts.push(translate(tail)?);
-        }
+        let parts = plan
+            .into_iter()
+            .map(|part| match part {
+                Part::Known(known) => Ok(known),
+                Part::Ask(clause, keep) => {
+                    let translated = translate(clause)?;
+                    if keep {
+                        self.put(segment, clause, &translated);
+                    }
+                    Ok(translated)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(parts.join(separator(target)))
+    }
+
+    fn get(&self, segment: SegmentId, clause: &str) -> Option<String> {
+        let segments = lock(&self.segments);
+        let (_, known) = segments.iter().find(|(id, _)| *id == segment)?;
+        known.get(clause).cloned()
+    }
+
+    fn put(&self, segment: SegmentId, clause: &str, translated: &str) {
+        let mut segments = lock(&self.segments);
+        if !segments.iter().any(|(id, _)| *id == segment) {
+            if segments.len() == SEGMENTS_KEPT {
+                segments.pop_front();
+            }
+            segments.push_back((segment, HashMap::new()));
+        }
+        if let Some((_, known)) = segments.iter_mut().find(|(id, _)| *id == segment) {
+            known.insert(clause.to_owned(), translated.to_owned());
+        }
     }
 }
 
@@ -66,6 +102,12 @@ fn split(text: &str) -> Vec<&str> {
     clauses.push(text[from..].trim());
     clauses.retain(|c| !c.is_empty());
     clauses
+}
+
+/// The part of `text` from the start of `first` to the end of `last`, both slices of it.
+fn span<'a>(text: &'a str, first: &str, last: &str) -> &'a str {
+    let offset = |part: &str| part.as_ptr() as usize - text.as_ptr() as usize;
+    &text[offset(first)..offset(last) + last.len()]
 }
 
 /// Chinese and Japanese are written without spaces between words.
@@ -100,11 +142,12 @@ mod tests {
             asked.borrow_mut().push(s.to_owned());
             Ok(s.to_uppercase())
         };
-        let mut c = Clauses::default();
+        let c = Clauses::default();
         let id = SegmentId::new();
-        c.translate(id, "Listeners, imagine", "id", upper).unwrap();
+        c.translate(id, "Listeners, imagine", "id", false, upper)
+            .unwrap();
         let out = c
-            .translate(id, "Listeners, imagine a friend", "id", upper)
+            .translate(id, "Listeners, imagine a friend", "id", false, upper)
             .unwrap();
         assert_eq!(out, "LISTENERS, IMAGINE A FRIEND");
         assert_eq!(
@@ -114,29 +157,77 @@ mod tests {
     }
 
     #[test]
-    fn a_rewritten_clause_and_a_new_segment_start_again() {
+    fn the_final_reuses_its_partials_and_translates_only_what_changed() {
+        let asked = RefCell::new(Vec::new());
+        let same = |s: &str| {
+            asked.borrow_mut().push(s.to_owned());
+            Ok(s.to_owned())
+        };
+        let c = Clauses::default();
+        let id = SegmentId::new();
+        c.translate(id, "Hello there, my friend, how", "id", false, same)
+            .unwrap();
+        asked.borrow_mut().clear();
+        let out = c
+            .translate(id, "Hello there, my friend, how are you?", "id", true, same)
+            .unwrap();
+        assert_eq!(out, "Hello there, my friend, how are you?");
+        assert_eq!(*asked.borrow(), ["how are you?"]);
+    }
+
+    #[test]
+    fn missing_clauses_of_a_final_that_follow_each_other_go_in_one_call() {
+        let asked = RefCell::new(Vec::new());
+        let same = |s: &str| {
+            asked.borrow_mut().push(s.to_owned());
+            Ok(s.to_owned())
+        };
+        let c = Clauses::default();
+        let id = SegmentId::new();
+        c.translate(id, "one, two, three", "id", false, same)
+            .unwrap();
+        asked.borrow_mut().clear();
+        let out = c
+            .translate(id, "Zero, one, two, three, four,  five.", "id", true, same)
+            .unwrap();
+        assert_eq!(out, "Zero, one, two, three, four,  five.");
+        assert_eq!(*asked.borrow(), ["Zero,", "three, four,  five."]);
+    }
+
+    #[test]
+    fn clauses_of_another_segment_are_not_reused() {
         let asked = RefCell::new(0);
         let count = |s: &str| {
             *asked.borrow_mut() += 1;
             Ok(s.to_owned())
         };
-        let mut c = Clauses::default();
-        let id = SegmentId::new();
-        c.translate(id, "Hello there, friend", "id", count).unwrap();
-        c.translate(id, "Hello, there, friend", "id", count)
+        let c = Clauses::default();
+        c.translate(SegmentId::new(), "Hello, friend", "id", false, count)
             .unwrap();
-        // "Hello there," became "Hello," and "there,": both new, plus the tail.
-        assert_eq!(*asked.borrow(), 2 + 3);
-        c.translate(SegmentId::new(), "Hello, there, friend", "id", count)
+        c.translate(SegmentId::new(), "Hello, friend", "id", false, count)
             .unwrap();
-        assert_eq!(*asked.borrow(), 5 + 3);
+        assert_eq!(*asked.borrow(), 4);
+    }
+
+    #[test]
+    fn only_the_latest_segments_are_kept() {
+        let c = Clauses::default();
+        let ids: Vec<_> = (0..=SEGMENTS_KEPT).map(|_| SegmentId::new()).collect();
+        for id in &ids {
+            c.translate(*id, "Hi.", "id", false, |s| Ok(s.to_owned()))
+                .unwrap();
+        }
+        assert_eq!(c.get(ids[0], "Hi."), None);
+        assert_eq!(c.get(ids[SEGMENTS_KEPT], "Hi.").as_deref(), Some("Hi."));
     }
 
     #[test]
     fn japanese_has_no_spaces_between_clauses() {
-        let mut c = Clauses::default();
+        let c = Clauses::default();
         let out = c
-            .translate(SegmentId::new(), "Yes, no", "ja", |s| Ok(s.to_owned()))
+            .translate(SegmentId::new(), "Yes, no", "ja", false, |s| {
+                Ok(s.to_owned())
+            })
             .unwrap();
         assert_eq!(out, "Yes,no");
     }

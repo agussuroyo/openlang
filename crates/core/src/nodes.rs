@@ -3,7 +3,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Condvar, Mutex, PoisonError,
         mpsc::{Sender, channel},
     },
     time::{Duration, Instant},
@@ -333,38 +333,46 @@ fn translation(t: &Transcript, language: &str, text: String) -> Packet {
 struct Delivery {
     ended: VecDeque<SegmentId>,
     closed: bool,
+    /// Finals being translated. Translation services answer one request at a time, so the
+    /// worker waits for these.
+    finals: usize,
 }
 
 /// Ended segments remembered. A partial translation is never this many segments late.
 const ENDED_KEPT: usize = 16;
 
 /// Translates unfinished speech on its own thread with its own translators, so a final never
-/// waits for a partial. A busy worker skips to the newest partial, and translates only the
-/// clauses that changed.
+/// waits for a partial. A busy worker skips to the newest partial.
 struct PartialWorker {
     jobs: Sender<Arc<Transcript>>,
-    delivery: Arc<Mutex<Delivery>>,
+    delivery: Arc<(Mutex<Delivery>, Condvar)>,
 }
 
 impl PartialWorker {
-    fn start(mut chain: TranslatorChain, out: Emitter) -> Self {
+    fn start(mut chain: TranslatorChain, clauses: Arc<Clauses>, out: Emitter) -> Self {
         let (jobs, queue) = channel::<Arc<Transcript>>();
-        let delivery = Arc::new(Mutex::new(Delivery::default()));
+        let delivery = Arc::new((Mutex::new(Delivery::default()), Condvar::new()));
         let shared = delivery.clone();
         std::thread::spawn(move || {
             chain.warm_up();
             let target = chain.target.clone();
-            let mut clauses = Clauses::default();
             while let Ok(mut t) = queue.recv() {
+                let (state, finals_done) = &*shared;
+                drop(
+                    finals_done
+                        .wait_while(lock(state), |d| d.finals > 0 && !d.closed)
+                        .unwrap_or_else(PoisonError::into_inner),
+                );
                 while let Ok(newer) = queue.try_recv() {
                     t = newer;
                 }
                 // Not reported: the final retries and reports it.
                 let translate = |clause: &str| chain.translate(clause, &t.language, None);
-                let Ok(text) = clauses.translate(t.segment.id, &t.text, &target, translate) else {
+                let id = t.segment.id;
+                let Ok(text) = clauses.translate(id, &t.text, &target, false, translate) else {
                     continue;
                 };
-                let delivery = lock(&shared);
+                let delivery = lock(state);
                 if delivery.closed {
                     return;
                 }
@@ -380,23 +388,34 @@ impl PartialWorker {
         let _ = self.jobs.send(partial);
     }
 
+    /// A final is being translated: the worker starts nothing new until it ends.
+    fn final_started(&self) {
+        lock(&self.delivery.0).finals += 1;
+    }
+
     /// Called before the final of `segment` is emitted, so no partial can follow it.
-    fn ended(&self, segment: SegmentId) {
-        let mut delivery = lock(&self.delivery);
+    fn final_ended(&self, segment: SegmentId) {
+        let mut delivery = lock(&self.delivery.0);
+        delivery.finals -= 1;
         delivery.ended.push_back(segment);
         if delivery.ended.len() > ENDED_KEPT {
             delivery.ended.pop_front();
         }
+        self.delivery.1.notify_all();
     }
 
     /// Nothing is emitted once this returns. A translation still running ends on its own.
     fn close(&self) {
-        lock(&self.delivery).closed = true;
+        lock(&self.delivery.0).closed = true;
+        self.delivery.1.notify_all();
     }
 }
 
+/// Translates clause by clause (see `Clauses`): fast, at some cost to the wording of long
+/// sentences.
 pub struct TranslateNode {
     finals: TranslatorChain,
+    clauses: Arc<Clauses>,
     partials: Option<PartialWorker>,
     interval: Duration,
     next: Option<Instant>,
@@ -412,6 +431,7 @@ impl TranslateNode {
     ) -> Self {
         Self {
             finals: TranslatorChain::new(providers, target),
+            clauses: Arc::default(),
             partials: None,
             interval,
             next: None,
@@ -443,7 +463,8 @@ impl Node for TranslateNode {
     }
     fn start(&mut self, out: Emitter) -> Result<()> {
         self.finals.warm_up();
-        self.partials = Some(PartialWorker::start(self.finals.twin(), out.clone()));
+        let (chain, clauses) = (self.finals.twin(), self.clauses.clone());
+        self.partials = Some(PartialWorker::start(chain, clauses, out.clone()));
         self.out = Some(out);
         Ok(())
     }
@@ -459,14 +480,18 @@ impl Node for TranslateNode {
         // A new segment's first partial is not held back by the previous one.
         self.next = None;
         let out = started(&self.out)?;
+        partials.final_started();
+        let target = self.finals.target.clone();
+        let finals = &mut self.finals;
+        let translate = |clause: &str| finals.translate(clause, &t.language, Some(out));
         let text = self
-            .finals
-            .translate(&t.text, &t.language, Some(out))
+            .clauses
+            .translate(t.segment.id, &t.text, &target, true, translate)
             // Already reported. The original text closes the segment, so no stale partial
             // translation stays on screen.
             .unwrap_or_else(|_| t.text.clone());
-        partials.ended(t.segment.id);
-        out.emit(translation(&t, &self.finals.target, text));
+        partials.final_ended(t.segment.id);
+        out.emit(translation(&t, &target, text));
         Ok(())
     }
     fn finish(&mut self) -> Result<()> {
