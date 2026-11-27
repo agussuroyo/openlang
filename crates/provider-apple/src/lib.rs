@@ -1,7 +1,11 @@
 //! Apple on-device speech recognition and translation. Free, offline, nothing bundled.
 #![cfg(target_os = "macos")]
 
-use std::{sync::Arc, thread::JoinHandle};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex, PoisonError},
+    thread::JoinHandle,
+};
 
 use openlang_apple_bridge::{Status, speech, translation};
 use openlang_core::{Error, Result, domain::AudioChunk, ports::*, registry::Registry};
@@ -79,22 +83,46 @@ impl SttSession for Speech {
     }
 }
 
-pub struct AppleTranslator(Descriptor);
+pub struct AppleTranslator {
+    descriptor: Descriptor,
+    /// Pairs whose download was already offered while the app runs: one answer is enough.
+    offered: Mutex<HashSet<(String, String)>>,
+}
 
 impl Default for AppleTranslator {
     fn default() -> Self {
-        Self(Descriptor {
-            id: "apple-translate",
-            name: "Apple Translate",
-            summary: "On this Mac, free, works offline.",
-            fields: vec![],
-        })
+        Self {
+            descriptor: Descriptor {
+                id: "apple-translate",
+                name: "Apple Translate",
+                summary: "On this Mac, free, works offline.",
+                fields: vec![],
+            },
+            offered: Mutex::default(),
+        }
+    }
+}
+
+impl AppleTranslator {
+    /// Whether the pair can be translated now, at whichever speed.
+    fn usable(source: &str, target: &str) -> Readiness {
+        match translation::status(source, target) {
+            Status::Ready => Readiness::Ready,
+            Status::Downloadable => Readiness::NeedsAction {
+                message: "Download this language in System Settings > General > Language & Region > Translation Languages.".into(),
+            },
+            Status::Unsupported => unsupported(format!("Apple cannot translate {source} to {target}")),
+        }
+    }
+
+    fn offered(&self) -> std::sync::MutexGuard<'_, HashSet<(String, String)>> {
+        self.offered.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl Provider for AppleTranslator {
     fn descriptor(&self) -> &Descriptor {
-        &self.0
+        &self.descriptor
     }
     fn location(&self, _: &Options) -> Location {
         Location::OnDevice
@@ -110,25 +138,30 @@ impl Provider for AppleTranslator {
         let Some(source) = &job.source else {
             return Readiness::Ready;
         };
-        match translation::status(source, &job.target) {
-            Status::Ready => Readiness::Ready,
-            Status::Downloadable => Readiness::NeedsAction {
-                message: "Download this language in System Settings > General > Language & Region > Translation Languages.".into(),
-            },
-            Status::Unsupported => {
-                unsupported(format!("Apple cannot translate {source} to {}", job.target))
-            }
+        let usable = Self::usable(source, &job.target);
+        let missing = matches!(usable, Readiness::NeedsAction { .. })
+            || translation::fast_status(source, &job.target) == Status::Downloadable;
+        let pair = (source.clone(), job.target.clone());
+        // The fast pack turns half a second per sentence into tens of milliseconds.
+        if missing && !self.offered().contains(&pair) {
+            return Readiness::NeedsDownload { bytes: None };
         }
+        usable
     }
     fn prepare(&self, job: &Job, _: &dyn Fn(f32)) -> Result<()> {
-        self.readiness(job).into_result()
+        let source = source(job)?;
+        self.offered()
+            .insert((source.to_owned(), job.target.clone()));
+        // Saying no is fine: translation then runs at the speed of what is installed.
+        let _ = translation::install(source, &job.target);
+        Self::usable(source, &job.target).into_result()
     }
 }
 
 impl Translator for AppleTranslator {
     fn open(&self, job: &Job) -> Result<Box<dyn TranslatorSession>> {
-        self.readiness(job).into_result()?;
         let (source, target) = (source(job)?.to_owned(), job.target.clone());
+        Self::usable(&source, &target).into_result()?;
         Ok(Box::new(Translation {
             warm: warm_up(&source, &target),
             source,

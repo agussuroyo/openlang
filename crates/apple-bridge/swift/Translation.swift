@@ -20,11 +20,26 @@ public func olTrStatus(_ source: UnsafePointer<CChar>, _ target: UnsafePointer<C
     let source = Locale.Language(identifier: string(source))
     let target = Locale.Language(identifier: string(target))
     let status = try? blocking { await LanguageAvailability().status(from: source, to: target) }.get()
+    return code(status)
+}
+
+/// 0 installed, 1 the user can download it, 2 unavailable.
+func code(_ status: LanguageAvailability.Status?) -> Int32 {
     switch status {
     case .installed: return 0
     case .supported: return 1
     default: return 2
     }
+}
+
+/// Status of the low-latency language pack; `nil` before macOS 26.4, which has none.
+func fastStatus(_ source: Locale.Language, _ target: Locale.Language)
+    -> LanguageAvailability.Status?
+{
+    guard #available(macOS 26.4, *) else { return nil }
+    return try? blocking {
+        await LanguageAvailability(preferredStrategy: .lowLatency).status(from: source, to: target)
+    }.get()
 }
 
 /// Low latency answers in tens of milliseconds instead of about half a second, so it is used
@@ -41,11 +56,7 @@ public func olTrOpen(_ source: UnsafePointer<CChar>, _ target: UnsafePointer<CCh
 }
 
 func fastSession(_ source: Locale.Language, _ target: Locale.Language) -> TranslationSession? {
-    guard #available(macOS 26.4, *) else { return nil }
-    let status = try? blocking {
-        await LanguageAvailability(preferredStrategy: .lowLatency).status(from: source, to: target)
-    }.get()
-    guard status == .installed else { return nil }
+    guard #available(macOS 26.4, *), fastStatus(source, target) == .installed else { return nil }
     return TranslationSession(installedSource: source, target: target, preferredStrategy: .lowLatency)
 }
 

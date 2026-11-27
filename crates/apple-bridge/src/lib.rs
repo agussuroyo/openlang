@@ -32,6 +32,8 @@ unsafe extern "C" {
     fn ol_stt_finish(session: *mut c_void) -> *mut c_char;
     fn ol_tr_languages() -> *mut c_char;
     fn ol_tr_status(source: *const c_char, target: *const c_char) -> i32;
+    fn ol_tr_fast_status(source: *const c_char, target: *const c_char) -> i32;
+    fn ol_tr_install(source: *const c_char, target: *const c_char) -> *mut c_char;
     fn ol_tr_open(source: *const c_char, target: *const c_char) -> *mut c_void;
     fn ol_tr_translate(
         session: *mut c_void,
@@ -201,6 +203,18 @@ pub mod translation {
 
     pub fn status(source: &str, target: &str) -> Status {
         Status::from_code(unsafe { ol_tr_status(c(source).as_ptr(), c(target).as_ptr()) })
+    }
+
+    /// Of the low-latency pack, which answers in tens of milliseconds instead of about half a
+    /// second. Unsupported before macOS 26.4.
+    pub fn fast_status(source: &str, target: &str) -> Status {
+        Status::from_code(unsafe { ol_tr_fast_status(c(source).as_ptr(), c(target).as_ptr()) })
+    }
+
+    /// Shows the system's download sheet for this pair, fast kind first, and returns once the
+    /// user downloaded it or said no. Needs a live main run loop.
+    pub fn install(source: &str, target: &str) -> Result<()> {
+        unsafe { check(ol_tr_install(c(source).as_ptr(), c(target).as_ptr())) }
     }
 
     pub struct Session(*mut c_void);

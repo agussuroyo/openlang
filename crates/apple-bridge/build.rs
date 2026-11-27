@@ -44,6 +44,7 @@ fn main() {
         "swift/Common.swift",
         "swift/Speech.swift",
         "swift/Translation.swift",
+        "swift/TranslationDownload.swift",
     ]));
     println!("cargo:rustc-link-search=native={out}");
     println!("cargo:rustc-link-search=native={sdk}/usr/lib/swift");
@@ -54,6 +55,8 @@ fn main() {
         "CoreMedia",
         "Speech",
         "Translation",
+        "AppKit",
+        "SwiftUI",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
