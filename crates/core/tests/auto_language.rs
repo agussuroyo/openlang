@@ -106,7 +106,16 @@ impl SttSession for Session {
         }));
         Ok(())
     }
+    /// Says its last words a little later, as a real recognizer does.
     fn finish(&mut self) -> Result<()> {
+        thread::sleep(Duration::from_millis(50));
+        (self.out)(Ok(SttUpdate {
+            text: "last".into(),
+            language: None,
+            start: Duration::ZERO,
+            end: Duration::from_secs(1),
+            is_final: true,
+        }));
         Ok(())
     }
 }
@@ -244,11 +253,12 @@ fn switches_only_after_two_sure_answers_in_a_row() {
     // Detections end on seconds 3, 8, 9, 14 and 15: every 5 s once open, every second while
     // a switch is pending.
     r.speak(17);
+    r.auto.finish().unwrap();
     let opened = r.opened();
     let languages: Vec<&str> = opened.iter().map(|(l, _)| l.as_str()).collect();
     assert_eq!(languages, ["id", "en"]);
-    // The "en" heard on second 8 lost to "id", so the held seconds 8 and 9 went to "id".
-    assert_eq!(opened[0].1, RATE * 14);
+    // "id" heard everything until "en" took over on second 16.
+    assert_eq!(opened[0].1, RATE * 16);
     let heard = r.heard.lock().unwrap();
     let last = heard.last().unwrap();
     assert_eq!(last.language.as_deref(), Some("en"));
@@ -260,12 +270,28 @@ fn switches_only_after_two_sure_answers_in_a_row() {
 fn a_new_language_is_heard_from_the_first_window_that_voted_for_it() {
     let mut r = run(vec![("id", 0.9), ("en", 0.9), ("en", 0.9)]);
     r.speak(11);
+    r.auto.finish().unwrap();
     let opened = r.opened();
-    // The window of seconds 5 to 7 voted "en" first. "id" heard up to second 7, then the
-    // audio was held until the switch; "en" got seconds 5 to 10.
-    assert_eq!(opened, [("id".into(), RATE * 8), ("en".into(), RATE * 6)]);
+    // The window of seconds 5 to 7 voted "en" first. "id" kept hearing until the switch on
+    // second 10, so no audio waited; "en" heard seconds 5 to 10 again.
+    assert_eq!(opened, [("id".into(), RATE * 10), ("en".into(), RATE * 6)]);
     let heard = r.heard.lock().unwrap();
     assert_eq!(heard.last().unwrap().start, Duration::from_secs(5));
+}
+
+#[test]
+fn a_replaced_recognizer_says_its_last_words_before_the_new_one_speaks() {
+    let mut r = run(vec![("id", 0.9), ("en", 0.9), ("en", 0.9)]);
+    r.speak(11);
+    r.auto.finish().unwrap();
+    let heard = r.heard.lock().unwrap();
+    let languages: Vec<&str> = heard.iter().filter_map(|u| u.language.as_deref()).collect();
+    let first = languages.iter().position(|l| *l == "en").unwrap();
+    assert!(
+        languages[first..].iter().all(|l| *l == "en"),
+        "{languages:?}"
+    );
+    assert_eq!(heard[first - 1].text, "last");
 }
 
 #[test]
