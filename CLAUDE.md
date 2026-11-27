@@ -59,7 +59,7 @@ Test notes:
   - Apple STT uses `SpeechTranscriber`, falling back to `DictationTranscriber` for locales such as `id-ID`. It cannot auto-detect the language.
   - Translation uses `TranslationSession(installedSource:)` with the default high-fidelity strategy (low-latency packs are not installed). It warms up on open.
 - `core/src/auto_language.rs`: Auto language for a recognizer that cannot detect (Apple). `LanguageDetector` (Whisper base model, `provider-whisper/src/detect.rs`) hears 3 s windows on its own thread; the recognizer opens with the detected primary tag (Apple accepts `id`) and gets the waiting audio. Switching needs the same new language twice in a row; audio is never held for it: the old recognizer keeps hearing while the new one opens, the new one then hears again from where its language began, and its output waits until the old one has said its last words (`Current::held`). Default spoken language is Auto.
-- `speech-chunks`: shared by non-streaming engines (Whisper, OpenAI-compatible). It cuts at pauses with an energy VAD, and a slow engine skips partials but never finals.
+- `speech-chunks`: shared by non-streaming engines (Whisper, OpenAI-compatible). It cuts at pauses with an energy VAD. A slow engine never falls further behind: finals that waited are heard in one call (`merge`), and partials are skipped while a call takes longer than `partial_every`.
 - `provider-openai`:
   - `location()` is `OnDevice` only for loopback URLs.
   - Keys are refused over non-loopback `http`, and redirects are disabled.

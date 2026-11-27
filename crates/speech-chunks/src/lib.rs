@@ -5,7 +5,7 @@ use std::{
     collections::VecDeque,
     sync::mpsc::{Receiver, Sender, channel},
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use openlang_core::{
@@ -198,7 +198,8 @@ impl ChunkedSession {
         partial_every: Option<Duration>,
     ) -> Self {
         let (jobs, queue) = channel();
-        let worker = std::thread::spawn(move || work(recognizer, &queue, &out));
+        let every = partial_every.unwrap_or(Duration::MAX);
+        let worker = std::thread::spawn(move || work(recognizer, &queue, &out, every));
         Self {
             cutter: Cutter::new(partial_every),
             jobs: Some(jobs),
@@ -214,27 +215,81 @@ impl ChunkedSession {
     }
 }
 
-fn work(mut recognizer: impl Recognizer, queue: &Receiver<Cut>, out: &SttOutput) {
-    while let Ok(mut job) = queue.recv() {
-        // An engine slower than real time skips partials but never a finished utterance.
-        while !job.is_final {
-            match queue.try_recv() {
-                Ok(next) => job = next,
-                Err(_) => break,
+/// What the engine is asked about: one cut, or finished utterances that waited, heard together.
+#[derive(Debug, PartialEq)]
+struct Job {
+    samples: Vec<f32>,
+    start: usize,
+    end: usize,
+    is_final: bool,
+}
+
+impl From<Cut> for Job {
+    fn from(cut: Cut) -> Self {
+        Self {
+            start: cut.end - cut.samples.len(),
+            samples: cut.samples,
+            end: cut.end,
+            is_final: cut.is_final,
+        }
+    }
+}
+
+/// Finished utterances in one call, a pause apart so the engine still hears where each ends.
+fn merge(finals: Vec<Cut>) -> Option<Job> {
+    let mut finals = finals.into_iter().map(Job::from);
+    let mut job = finals.next()?;
+    for next in finals {
+        job.samples
+            .extend(std::iter::repeat_n(0.0, PAUSE_FRAMES * FRAME));
+        job.samples.extend(next.samples);
+        job.end = next.end;
+    }
+    Some(job)
+}
+
+/// An engine slower than real time never falls further behind: finished utterances that
+/// waited are heard in one call, and partials are skipped while a call takes longer than
+/// `partial_every`.
+fn work(
+    mut recognizer: impl Recognizer,
+    queue: &Receiver<Cut>,
+    out: &SttOutput,
+    partial_every: Duration,
+) {
+    let mut took = Duration::ZERO;
+    while let Ok(first) = queue.recv() {
+        let mut finals = Vec::new();
+        let mut partial = None;
+        for cut in std::iter::once(first).chain(queue.try_iter()) {
+            // A final replaces the partials of its utterance; a later partial is the next one's.
+            if cut.is_final {
+                finals.push(cut);
+                partial = None;
+            } else {
+                partial = Some(cut);
             }
         }
-        let seconds = |n: usize| Duration::from_secs_f64(n as f64 / RATE as f64);
-        let result = recognizer
-            .recognize(&job.samples, job.is_final)
-            .map(|h| SttUpdate {
-                text: h.text.trim().to_owned(),
-                language: h.language,
-                start: seconds(job.end.saturating_sub(job.samples.len())),
-                end: seconds(job.end),
-                is_final: job.is_final,
-            });
-        out(result);
+        let partial = partial.filter(|_| took < partial_every).map(Job::from);
+        for job in merge(finals).into_iter().chain(partial) {
+            let began = Instant::now();
+            out(recognize(&mut recognizer, &job));
+            took = began.elapsed();
+        }
     }
+}
+
+fn recognize(recognizer: &mut impl Recognizer, job: &Job) -> Result<SttUpdate> {
+    let seconds = |n: usize| Duration::from_secs_f64(n as f64 / RATE as f64);
+    recognizer
+        .recognize(&job.samples, job.is_final)
+        .map(|h| SttUpdate {
+            text: h.text.trim().to_owned(),
+            language: h.language,
+            start: seconds(job.start),
+            end: seconds(job.end),
+            is_final: job.is_final,
+        })
 }
 
 impl SttSession for ChunkedSession {
@@ -399,7 +454,26 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_engine_drops_partials_but_never_finals() {
+    fn waiting_finals_are_heard_together_a_pause_apart() {
+        let cut = |from: usize, to: usize| Cut {
+            samples: vec![1.0; to - from],
+            end: to,
+            is_final: true,
+        };
+        let job = merge(vec![cut(0, 100), cut(900, 1000)]).unwrap();
+        assert_eq!(job.start, 0);
+        assert_eq!(job.end, 1000);
+        assert_eq!(job.samples.len(), 200 + PAUSE_FRAMES * FRAME);
+        assert!(
+            job.samples[100..100 + PAUSE_FRAMES * FRAME]
+                .iter()
+                .all(|s| *s == 0.0)
+        );
+        assert_eq!(merge(vec![]), None);
+    }
+
+    #[test]
+    fn a_slow_engine_drops_partials_but_never_the_words_of_a_final() {
         let seen: Arc<Mutex<Vec<SttUpdate>>> = Arc::default();
         let log = seen.clone();
         let mut s = ChunkedSession::new(
@@ -420,7 +494,11 @@ mod tests {
         }
         s.finish().unwrap();
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.iter().filter(|u| u.is_final).count(), 5);
+        let finals: Vec<_> = seen.iter().filter(|u| u.is_final).collect();
+        assert!((1..=5).contains(&finals.len()));
+        // From the first word of the first utterance to the last word of the fifth.
+        assert_eq!(finals[0].start, Duration::ZERO);
+        assert!(finals.last().unwrap().end >= Duration::from_millis(4 * 2400 + 1500));
         assert!(seen.len() < 20);
         assert!(seen.windows(2).all(|w| w[0].end <= w[1].end));
     }
