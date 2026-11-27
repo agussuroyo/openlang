@@ -51,8 +51,33 @@ macro_rules! provider {
 struct Stt {
     descriptor: Descriptor,
     opened: Arc<Mutex<Vec<(String, usize)>>>,
+    /// How long `prepare` takes; `None` means nothing to download.
+    download: Option<Duration>,
 }
-provider!(Stt, false);
+impl Provider for Stt {
+    fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
+    }
+    fn location(&self, _: &Options) -> Location {
+        Location::OnDevice
+    }
+    fn languages(&self) -> Languages {
+        Languages {
+            tags: vec!["en-US".into(), "id-ID".into()],
+            can_detect: false,
+        }
+    }
+    fn readiness(&self, _: &Job) -> Readiness {
+        match self.download {
+            Some(_) => Readiness::NeedsDownload { bytes: None },
+            None => Readiness::Ready,
+        }
+    }
+    fn prepare(&self, _: &Job, _: &dyn Fn(f32)) -> Result<()> {
+        thread::sleep(self.download.unwrap_or_default());
+        Ok(())
+    }
+}
 impl SpeechToText for Stt {
     fn open(&self, job: &Job, out: SttOutput) -> Result<Box<dyn SttSession>> {
         let mut opened = self.opened.lock().unwrap();
@@ -90,17 +115,22 @@ impl SttSession for Session {
 struct Detector {
     descriptor: Descriptor,
     answers: Vec<(&'static str, f32)>,
+    detections: Arc<Mutex<usize>>,
 }
 provider!(Detector, true);
 impl LanguageDetector for Detector {
     fn open(&self, allowed: Vec<String>) -> Result<Box<dyn DetectorSession>> {
         assert_eq!(allowed, ["en", "id"]);
-        Ok(Box::new(Script(self.answers.clone().into_iter())))
+        Ok(Box::new(Script(
+            self.answers.clone().into_iter(),
+            self.detections.clone(),
+        )))
     }
 }
-struct Script(std::vec::IntoIter<(&'static str, f32)>);
+struct Script(std::vec::IntoIter<(&'static str, f32)>, Arc<Mutex<usize>>);
 impl DetectorSession for Script {
     fn detect(&mut self, _: &[f32]) -> Result<Option<Detected>> {
+        *self.1.lock().unwrap() += 1;
         Ok(self.0.next().map(|(language, confidence)| Detected {
             language: language.into(),
             confidence,
@@ -112,29 +142,41 @@ struct Run {
     auto: AutoLanguage,
     opened: Arc<Mutex<Vec<(String, usize)>>>,
     heard: Arc<Mutex<Vec<SttUpdate>>>,
+    detections: Arc<Mutex<usize>>,
     second: u64,
+    /// The longest single `push`.
+    slowest: Duration,
 }
 
 fn run(answers: Vec<(&'static str, f32)>) -> Run {
+    run_with(answers, None)
+}
+
+fn run_with(answers: Vec<(&'static str, f32)>, download: Option<Duration>) -> Run {
     let opened = Arc::new(Mutex::default());
     let heard = Arc::new(Mutex::new(Vec::new()));
+    let detections = Arc::new(Mutex::new(0));
     let sink = heard.clone();
     let out: SttOutput =
         Arc::new(move |u: Result<SttUpdate>| sink.lock().unwrap().push(u.unwrap()));
     let stt = Arc::new(Stt {
         descriptor: descriptor(),
         opened: opened.clone(),
+        download,
     });
     let detector = Detector {
         descriptor: descriptor(),
         answers,
+        detections: detections.clone(),
     };
     let auto = AutoLanguage::open(stt, Job::default(), &detector, out).unwrap();
     Run {
         auto,
         opened,
         heard,
+        detections,
         second: 0,
+        slowest: Duration::ZERO,
     }
 }
 
@@ -148,7 +190,9 @@ impl Run {
                 at: Duration::from_secs(self.second),
                 segment: None,
             };
+            let started = Instant::now();
             self.auto.push(&chunk).unwrap();
+            self.slowest = self.slowest.max(started.elapsed());
             self.second += 1;
             thread::sleep(Duration::from_millis(30));
         }
@@ -164,6 +208,7 @@ fn only_auto_on_a_recognizer_that_cannot_detect_needs_the_detector() {
     let stt = Stt {
         descriptor: descriptor(),
         opened: Arc::default(),
+        download: None,
     };
     assert!(needs_detector(&stt, &Job::default()));
     let chosen = Job {
@@ -196,14 +241,50 @@ fn switches_only_after_two_sure_answers_in_a_row() {
         ("en", 0.9),
         ("en", 0.9),
     ]);
-    r.speak(9);
-    let languages: Vec<String> = r.opened().into_iter().map(|(l, _)| l).collect();
+    // Detections end on seconds 3, 8, 9, 14 and 15: every 5 s once open, every second while
+    // a switch is pending.
+    r.speak(17);
+    let opened = r.opened();
+    let languages: Vec<&str> = opened.iter().map(|(l, _)| l.as_str()).collect();
     assert_eq!(languages, ["id", "en"]);
+    // The "en" heard on second 8 lost to "id", so the held seconds 8 and 9 went to "id".
+    assert_eq!(opened[0].1, RATE * 14);
     let heard = r.heard.lock().unwrap();
     let last = heard.last().unwrap();
     assert_eq!(last.language.as_deref(), Some("en"));
     // The new recognizer starts later in the session, so its times move with it.
     assert!(last.start > Duration::from_secs(5));
+}
+
+#[test]
+fn a_new_language_is_heard_from_the_first_window_that_voted_for_it() {
+    let mut r = run(vec![("id", 0.9), ("en", 0.9), ("en", 0.9)]);
+    r.speak(11);
+    let opened = r.opened();
+    // The window of seconds 5 to 7 voted "en" first. "id" heard up to second 7, then the
+    // audio was held until the switch; "en" got seconds 5 to 10.
+    assert_eq!(opened, [("id".into(), RATE * 8), ("en".into(), RATE * 6)]);
+    let heard = r.heard.lock().unwrap();
+    assert_eq!(heard.last().unwrap().start, Duration::from_secs(5));
+}
+
+#[test]
+fn a_slow_download_never_holds_up_the_audio() {
+    let mut r = run_with(vec![("id", 0.9)], Some(Duration::from_millis(500)));
+    r.speak(8);
+    assert!(r.slowest < Duration::from_millis(100), "{:?}", r.slowest);
+    assert!(r.opened().is_empty());
+    // Stopping waits for the recognizer, which then hears everything that was said.
+    r.auto.finish().unwrap();
+    assert_eq!(r.opened(), [("id".into(), RATE * 8)]);
+}
+
+#[test]
+fn detects_less_often_once_the_language_is_known() {
+    let mut r = run(vec![("id", 0.9); 20]);
+    r.speak(15);
+    // Seconds 2, 7 and 12: every 5 s after the first answer instead of every second.
+    assert_eq!(*r.detections.lock().unwrap(), 3);
 }
 
 #[test]
