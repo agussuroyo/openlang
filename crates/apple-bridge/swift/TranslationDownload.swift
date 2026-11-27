@@ -27,24 +27,35 @@ public func olTrInstall(_ source: UnsafePointer<CChar>, _ target: UnsafePointer<
     let target = Locale.Language(identifier: string(target))
     let done = DispatchSemaphore(value: 0)
     let failure = Box<Error?>(nil)
+    let window = Box<NSWindow?>(nil)
+    // Runs on the main thread, once: the sheet's answer or the time limit, whichever is first.
+    let end = { (error: Error?) in
+        guard let shown = window.value else { return }
+        window.value = nil
+        failure.value = error
+        shown.close()
+        done.signal()
+    }
     DispatchQueue.main.async {
-        let window = NSWindow(
+        let shown = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 120),
             styleMask: [.titled], backing: .buffered, defer: false)
-        window.title = "OpenLang"
-        window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(
+        shown.title = "OpenLang"
+        shown.isReleasedWhenClosed = false
+        shown.contentView = NSHostingView(
             rootView: Download(source: source, target: target) { error in
-                failure.value = error
-                window.close()
-                done.signal()
+                DispatchQueue.main.async { end(error) }
             })
-        window.center()
-        window.level = .floating
+        shown.center()
+        shown.level = .floating
+        window.value = shown
         NSApplication.shared.activate()
-        window.makeKeyAndOrderFront(nil)
+        shown.makeKeyAndOrderFront(nil)
     }
-    done.wait()
+    // Nobody may be there to answer. A download already started goes on in the background.
+    if done.wait(timeout: .now() + 120) == .timedOut {
+        DispatchQueue.main.sync { end(nil) }
+    }
     guard let error = failure.value else { return nil }
     return text(error)
 }
