@@ -28,13 +28,16 @@ const WINDOW: usize = RATE * 3;
 const STEP: usize = RATE;
 /// How often a detection starts while a recognizer is open and no switch is pending.
 const LOCKED_STEP: usize = RATE * 5;
-/// Audio kept for the recognizer while the language is still unknown, and heard audio kept for
-/// a new recognizer while a switch is pending.
+/// Audio kept for the recognizer while the language is still unknown, and heard audio kept
+/// while a vote for a new language is pending.
 const WAITING: usize = RATE * 10;
 /// Heard audio kept, while no switch is pending, so a new recognizer can start where its
 /// language began.
 const KEPT: usize = WINDOW + 2 * STEP;
-/// How long `finish` waits for a recognizer that is still opening.
+/// Heard audio kept while a new recognizer opens, which may first download its model.
+const REPLAY: usize = RATE * 30;
+/// How long `finish` waits for a recognizer that is still opening, and a new recognizer for
+/// the last words of the one it replaces.
 const FINISH_LIMIT: Duration = Duration::from_secs(3);
 
 /// Opening needs one sure answer; switching needs the same new answer twice.
@@ -246,8 +249,10 @@ impl AutoLanguage {
     }
 
     /// The replaced recognizer says its last words on its own thread, after the one replaced
-    /// before it; the output of `next` waits for them.
+    /// before it; the output of `next` waits for them, but never longer than `FINISH_LIMIT`.
+    /// Words that come later would mix with the new language, so they are dropped.
     fn retire(&mut self, mut old: Box<dyn SttSession>, next: Arc<Mutex<Current>>) {
+        let replaced = self.current.clone();
         lock(&next).held = Some(Vec::new());
         let before = self.retiring.take();
         let out = self.out.clone();
@@ -255,8 +260,16 @@ impl AutoLanguage {
             if let Some(before) = before {
                 let _ = before.join();
             }
-            if let Err(e) = old.finish() {
-                out(Err(e));
+            let (said, last_words) = channel();
+            let report = out.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = old.finish() {
+                    report(Err(e));
+                }
+                let _ = said.send(());
+            });
+            if last_words.recv_timeout(FINISH_LIMIT).is_err() {
+                lock(&replaced).held = Some(Vec::new());
             }
             let mut next = lock(&next);
             for update in next.held.take().into_iter().flatten() {
@@ -321,8 +334,11 @@ impl AutoLanguage {
         self.push_recognizer(&chunk);
         self.heard_samples += chunk.samples.len();
         self.heard.push_back(chunk);
-        let pending = self.candidate.is_some() || self.opening.is_some();
-        let kept = if pending { WAITING } else { KEPT };
+        let kept = match (&self.opening, &self.candidate) {
+            (Some(_), _) => REPLAY,
+            (None, Some(_)) => WAITING,
+            (None, None) => KEPT,
+        };
         while self.heard_samples > kept {
             let Some(old) = self.heard.pop_front() else {
                 break;
