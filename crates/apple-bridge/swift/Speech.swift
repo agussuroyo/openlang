@@ -117,6 +117,8 @@ final class SpeechSession: @unchecked Sendable {
     private let reader: Task<Void, Error>
     private let gate = Gate()
     private var heardAudio = false
+    /// Converter input kept for the next push once the converter has let go of it.
+    private var spare: AVAudioPCMBuffer?
 
     init(_ tag: String, _ context: UnsafeMutableRawPointer?, _ callback: @escaping SpeechCallback)
         async throws
@@ -157,11 +159,17 @@ final class SpeechSession: @unchecked Sendable {
     }
 
     func push(_ samples: UnsafePointer<Float>, _ count: Int) throws {
-        guard count > 0,
-            let buffer = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(count))
-        else { return }
+        guard count > 0 else { return }
+        let frames = AVAudioFrameCount(count)
+        // The analyzer reads its input later, so a buffer handed to it is never reused.
+        var buffer = converter == nil ? nil : spare
+        spare = nil
+        if (buffer?.frameCapacity ?? 0) < frames {
+            buffer = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: frames)
+        }
+        guard let buffer else { return }
         heardAudio = true
-        buffer.frameLength = AVAudioFrameCount(count)
+        buffer.frameLength = frames
         buffer.floatChannelData![0].update(from: samples, count: count)
         guard let converter else {
             input.yield(AnalyzerInput(buffer: buffer))
@@ -171,19 +179,36 @@ final class SpeechSession: @unchecked Sendable {
             (Double(count) * target.sampleRate / source.sampleRate).rounded(.up)) + 64
         guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
         var pending: AVAudioPCMBuffer? = buffer
+        var released = false
         var failure: NSError?
         converter.convert(to: out, error: &failure) { _, status in
+            // Asking again means the converter is done with the buffer it was given.
+            released = pending == nil
             defer { pending = nil }
             status.pointee = pending == nil ? .noDataNow : .haveData
             return pending
         }
+        if released { spare = buffer }
         if let failure { throw failure }
         if out.frameLength > 0 { input.yield(AnalyzerInput(buffer: out)) }
+    }
+
+    /// Hands the analyzer the samples the converter still holds.
+    private func drain() {
+        guard let converter, let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096)
+        else { return }
+        var failure: NSError?
+        converter.convert(to: out, error: &failure) { _, status in
+            status.pointee = .endOfStream
+            return nil
+        }
+        if failure == nil, out.frameLength > 0 { input.yield(AnalyzerInput(buffer: out)) }
     }
 
     /// Never blocks for long, and no callback happens after it returns.
     func finish() throws {
         defer { gate.close() }
+        if heardAudio { drain() }
         input.finish()
         // Without any audio the result sequence never ends, so there is nothing to wait for.
         guard heardAudio else {
