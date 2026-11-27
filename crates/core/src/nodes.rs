@@ -74,9 +74,20 @@ struct Segmenter {
     origin: Origin,
     language: String,
     offset: Option<Duration>,
+    /// Text of the last partial, to close the segment when its final comes back empty.
+    last: String,
 }
 
 impl Segmenter {
+    /// An empty final ends the utterance: a shown partial becomes final, otherwise nothing shows.
+    fn close(&mut self, u: SttUpdate) -> Option<Transcript> {
+        if self.revision == 0 {
+            return None;
+        }
+        let text = std::mem::take(&mut self.last);
+        Some(self.transcript(SttUpdate { text, ..u }))
+    }
+
     fn transcript(&mut self, u: SttUpdate) -> Transcript {
         let offset = self.offset.unwrap_or_default();
         let t = Transcript {
@@ -96,6 +107,9 @@ impl Segmenter {
         if u.is_final {
             self.id = SegmentId::new();
             self.revision = 0;
+            self.last.clear();
+        } else {
+            self.last.clone_from(&t.text);
         }
         t
     }
@@ -106,6 +120,9 @@ pub struct SttNode {
     detector: Option<Arc<dyn LanguageDetector>>,
     segmenter: Arc<Mutex<Segmenter>>,
     session: Option<Box<dyn SttSession>>,
+    out: Option<Emitter>,
+    /// The last push failed and was reported, so the same trouble is not reported again.
+    push_failed: bool,
 }
 
 impl SttNode {
@@ -125,12 +142,15 @@ impl SttNode {
             origin,
             language,
             offset: None,
+            last: String::new(),
         };
         Self {
             providers,
             detector,
             segmenter: Arc::new(Mutex::new(segmenter)),
             session: None,
+            out: None,
+            push_failed: false,
         }
     }
 
@@ -163,14 +183,21 @@ impl Node for SttNode {
         &[PacketKind::Transcript]
     }
     fn start(&mut self, out: Emitter) -> Result<()> {
+        self.out = Some(out.clone());
         let segmenter = self.segmenter.clone();
         let emit = out.clone();
         let output: SttOutput = Arc::new(move |update| match update {
-            Ok(u) if u.text.trim().is_empty() => {}
+            Ok(u) if u.text.trim().is_empty() && !u.is_final => {}
             Ok(u) => {
                 let mut s = segmenter.lock().unwrap_or_else(PoisonError::into_inner);
-                let transcript = s.transcript(u);
-                emit.emit(Packet::Transcript(Arc::new(transcript)));
+                let transcript = if u.text.trim().is_empty() {
+                    s.close(u)
+                } else {
+                    Some(s.transcript(u))
+                };
+                if let Some(t) = transcript {
+                    emit.emit(Packet::Transcript(Arc::new(t)));
+                }
             }
             Err(e) => emit.report(e),
         });
@@ -198,7 +225,16 @@ impl Node for SttNode {
             .unwrap_or_else(PoisonError::into_inner)
             .offset
             .get_or_insert(chunk.at);
-        session.push(&chunk)
+        // One bad chunk must not end recognition for the rest of the session.
+        match session.push(&chunk) {
+            Ok(()) => self.push_failed = false,
+            Err(e) if !self.push_failed => {
+                self.push_failed = true;
+                started(&self.out)?.report(e);
+            }
+            Err(_) => {}
+        }
+        Ok(())
     }
     fn finish(&mut self) -> Result<()> {
         self.session.take().map_or(Ok(()), |mut s| s.finish())
@@ -233,7 +269,8 @@ impl TranslateNode {
         }
     }
 
-    fn translate(&mut self, text: &str, source: &str) -> Result<String> {
+    /// Failures of unfinished speech are not reported: the final retries and reports them.
+    fn translate(&mut self, text: &str, source: &str, report: bool) -> Result<String> {
         if primary(source) == primary(&self.target) {
             return Ok(text.to_owned());
         }
@@ -258,7 +295,9 @@ impl TranslateNode {
                 Ok(t) => return Ok(t),
                 Err(e) => {
                     self.session = None;
-                    started(&self.out)?.report(e.clone());
+                    if report {
+                        started(&self.out)?.report(e.clone());
+                    }
                     last = e;
                 }
             }
@@ -306,10 +345,17 @@ impl Node for TranslateNode {
         let Packet::Transcript(t) = packet else {
             return Ok(());
         };
-        let translated = self.translate(&t.text, &t.language);
-        self.next = Some(Instant::now() + self.interval);
-        // Already reported; the original text is still on screen, so keep going.
-        let Ok(text) = translated else { return Ok(()) };
+        let is_final = t.segment.is_final;
+        // A new segment's first partial is not held back by the previous one.
+        self.next = (!is_final).then(|| Instant::now() + self.interval);
+        let text = match self.translate(&t.text, &t.language, is_final) {
+            Ok(text) => text,
+            // Already reported. The original text closes the segment, so no stale partial
+            // translation stays on screen.
+            Err(_) if is_final => t.text.clone(),
+            // The original text is still on screen, so keep going.
+            Err(_) => return Ok(()),
+        };
         started(&self.out)?.emit(Packet::Translation(Arc::new(Translation {
             segment: t.segment.clone(),
             source: t.text.clone(),

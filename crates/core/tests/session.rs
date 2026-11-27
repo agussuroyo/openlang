@@ -7,6 +7,7 @@ use openlang_core::{
     Error, Result,
     domain::*,
     graph::{Emitter, GraphBuilder, Node},
+    nodes::{SttNode, TranslateNode},
     ports::*,
     realtime::{self, AudioReader},
     registry::Registry,
@@ -52,10 +53,21 @@ macro_rules! provider {
     };
 }
 
-/// Emits partials as audio arrives and the final text only when the session ends.
+#[derive(Clone, Copy)]
+enum Speech {
+    /// Emits partials as audio arrives and the final text only when the session ends.
+    Normal,
+    /// The first chunk ends one utterance with an empty final, then a silent one, then starts
+    /// another.
+    EmptyFinals,
+    /// Pushes 1, 2 and 4 fail.
+    FlakyPush,
+}
+
 struct FakeStt {
     base: Base,
     fail: bool,
+    speech: Speech,
 }
 provider!(FakeStt);
 impl SpeechToText for FakeStt {
@@ -63,13 +75,21 @@ impl SpeechToText for FakeStt {
         if self.fail {
             return Err(Error::Provider("down".into()));
         }
-        Ok(Box::new(FakeSttSession(out)))
+        Ok(Box::new(FakeSttSession {
+            out,
+            speech: self.speech,
+            pushes: 0,
+        }))
     }
 }
-struct FakeSttSession(SttOutput);
+struct FakeSttSession {
+    out: SttOutput,
+    speech: Speech,
+    pushes: u32,
+}
 impl FakeSttSession {
     fn say(&self, text: &str, is_final: bool) {
-        (self.0)(Ok(SttUpdate {
+        (self.out)(Ok(SttUpdate {
             text: text.into(),
             language: None,
             start: Duration::ZERO,
@@ -80,7 +100,21 @@ impl FakeSttSession {
 }
 impl SttSession for FakeSttSession {
     fn push(&mut self, _: &AudioChunk) -> Result<()> {
-        self.say("hello", false);
+        self.pushes += 1;
+        match self.speech {
+            Speech::Normal => self.say("hello", false),
+            Speech::EmptyFinals if self.pushes == 1 => {
+                self.say("hello", false);
+                self.say(" ", true);
+                self.say("", true);
+                self.say("again", false);
+            }
+            Speech::EmptyFinals => {}
+            Speech::FlakyPush if matches!(self.pushes, 1 | 2 | 4) => {
+                return Err(Error::Provider("bad chunk".into()));
+            }
+            Speech::FlakyPush => {}
+        }
         Ok(())
     }
     fn finish(&mut self) -> Result<()> {
@@ -194,14 +228,16 @@ fn registry() -> Registry {
         d: descriptor("mic"),
         origin: Origin::Microphone,
     }));
-    r.stt.push(Arc::new(FakeStt {
-        base: base("stt", Location::OnDevice),
-        fail: false,
-    }));
-    r.stt.push(Arc::new(FakeStt {
-        base: base("bad", Location::OnDevice),
-        fail: true,
-    }));
+    for (id, fail, speech) in [
+        ("stt", false, Speech::Normal),
+        ("bad", true, Speech::Normal),
+    ] {
+        r.stt.push(Arc::new(FakeStt {
+            base: base(id, Location::OnDevice),
+            fail,
+            speech,
+        }));
+    }
     for (id, location, fail) in [
         ("good", Location::OnDevice, false),
         ("bad", Location::OnDevice, true),
@@ -533,4 +569,149 @@ fn loudness_ignores_room_noise_and_fills_with_loud_sound() {
     assert_eq!(loudness(&[0.002, -0.002]), 0.0, "-54 dB room noise");
     let speech = loudness(&[0.1, -0.1, 0.1, -0.1]);
     assert!((speech - 0.75).abs() < 1e-3, "-20 dB speech: {speech}");
+}
+
+/// Forwards every packet it receives to a channel, with the time it arrived.
+struct Collect(mpsc::Sender<(Packet, Instant)>, &'static [PacketKind]);
+impl Node for Collect {
+    fn name(&self) -> String {
+        "collect".into()
+    }
+    fn accepts(&self) -> &'static [PacketKind] {
+        self.1
+    }
+    fn emits(&self) -> &'static [PacketKind] {
+        &[]
+    }
+    fn handle(&mut self, p: Packet) -> Result<()> {
+        let _ = self.0.send((p, Instant::now()));
+        Ok(())
+    }
+}
+
+fn job() -> Job {
+    Job {
+        source: Some("en-US".into()),
+        target: "id".into(),
+        options: Options::default(),
+    }
+}
+
+/// Runs an `SttNode` alone on `chunks` audio chunks. Returns the reported nodes and transcripts.
+fn recognize(speech: Speech, chunks: usize) -> (Vec<String>, Vec<Transcript>) {
+    let stt: Arc<dyn SpeechToText> = Arc::new(FakeStt {
+        base: Base {
+            d: descriptor("fake"),
+            location: Location::OnDevice,
+        },
+        fail: false,
+        speech,
+    });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let (tx, rx) = mpsc::channel();
+    let mut g = GraphBuilder::default();
+    let node = SttNode::new(vec![(stt, job())], None, Origin::System);
+    let root = g.root(Box::new(node)).unwrap();
+    g.add(Box::new(Collect(tx, &[PacketKind::Transcript])), &[root])
+        .unwrap();
+    let graph = g
+        .start(Arc::new(move |n, _| log.lock().unwrap().push(n.to_owned())))
+        .unwrap();
+    for _ in 0..chunks {
+        graph.input().emit(Packet::Audio(Arc::new(AudioChunk {
+            format: AudioFormat::SPEECH,
+            samples: vec![0.1; 160],
+            at: Duration::ZERO,
+            segment: None,
+        })));
+    }
+    graph.finish();
+    let transcripts = rx
+        .try_iter()
+        .filter_map(|(p, _)| match p {
+            Packet::Transcript(t) => Some((*t).clone()),
+            _ => None,
+        })
+        .collect();
+    let seen = seen.lock().unwrap().clone();
+    (seen, transcripts)
+}
+
+#[test]
+fn an_empty_final_closes_the_shown_line_and_the_next_one_starts_fresh() {
+    let (_, t) = recognize(Speech::EmptyFinals, 1);
+    let texts: Vec<_> = t
+        .iter()
+        .map(|t| (t.text.as_str(), t.segment.is_final))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            ("hello", false),
+            ("hello", true),
+            ("again", false),
+            ("hello world", true)
+        ]
+    );
+    assert_eq!(t[0].segment.id, t[1].segment.id);
+    assert_ne!(t[1].segment.id, t[2].segment.id);
+    assert_eq!(t[2].segment.id, t[3].segment.id);
+}
+
+#[test]
+fn a_failed_push_is_reported_once_and_recognition_goes_on() {
+    let (seen, t) = recognize(Speech::FlakyPush, 5);
+    assert_eq!(seen, ["stt", "stt"]);
+    assert_eq!(t.last().map(|t| t.text.as_str()), Some("hello world"));
+}
+
+fn transcript(text: &str, is_final: bool) -> Packet {
+    Packet::Transcript(Arc::new(Transcript {
+        segment: Segment {
+            id: SegmentId::new(),
+            revision: 0,
+            origin: Origin::System,
+            start: Duration::ZERO,
+            end: Duration::ZERO,
+            is_final,
+            speaker: None,
+        },
+        language: "en-US".into(),
+        text: text.into(),
+    }))
+}
+
+#[test]
+fn a_final_does_not_hold_back_the_next_partial() {
+    let good: Arc<dyn Translator> = registry().translator("good").unwrap().clone();
+    let (tx, rx) = mpsc::channel();
+    let mut g = GraphBuilder::default();
+    let node = TranslateNode::new(vec![(good, job())], "id".into(), Duration::from_secs(5));
+    let root = g.root(Box::new(node)).unwrap();
+    g.add(Box::new(Collect(tx, &[PacketKind::Translation])), &[root])
+        .unwrap();
+    let graph = g.start(Arc::new(|_, _| {})).unwrap();
+    let t = Instant::now();
+    graph.input().emit(transcript("one", true));
+    graph.input().emit(transcript("two", false));
+    let got: Vec<_> = (0..2)
+        .map_while(|_| rx.recv_timeout(Duration::from_secs(1)).ok())
+        .collect();
+    assert_eq!(got.len(), 2);
+    assert!(got[1].1.duration_since(t) < Duration::from_secs(1));
+    graph.finish();
+}
+
+#[test]
+fn a_failed_final_translation_closes_with_the_original_text() {
+    let rec = Arc::new(Recorder::default());
+    run(plan(&["stt"], &["bad"]), vec![rec.clone()], &[]);
+    assert_eq!(rec.finals()[0].text, "hello world");
+    let failures = rec
+        .events()
+        .iter()
+        .filter(|e| matches!(e, EventBody::Failed { .. }))
+        .count();
+    assert_eq!(failures, 1, "the failed partial is not reported");
 }
