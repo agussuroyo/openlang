@@ -63,6 +63,28 @@ fn run() {
             "missing `{expect}`"
         );
     }
+    let job = Job {
+        source: Some("en-US".into()),
+        target: "id".into(),
+        options: Options::new(),
+    };
+    let talk = contract::speak(
+        "Samantha",
+        "Good morning everyone. [[slnc 900]] Today we will review the project budget. [[slnc 900]] \
+         The first item is travel. [[slnc 900]] Then we look at hiring for next year. [[slnc 900]] \
+         Finally we agree on the dates for the launch.",
+    );
+    for stress in [false, true] {
+        let (heard, translated) = contract::latency(
+            registry.stt("apple-speech").unwrap().clone(),
+            registry.translator("apple-translate").unwrap().clone(),
+            &job,
+            &talk,
+            stress,
+        );
+        println!("stress {stress}: transcript {heard:?}");
+        println!("stress {stress}: translation {translated:?}");
+    }
     let bad = Job {
         source: Some("tlh".into()),
         ..Job::default()
