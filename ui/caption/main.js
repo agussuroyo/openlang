@@ -19,9 +19,20 @@ const subtitle = subtitles({
   onQuiet: quiet => show(!quiet || previewing && !live),
 });
 
+// The window is exactly as tall as its two-line slots, so the text always fits and no empty space covers the screen.
+function fitHeight() {
+  const lines = [...document.querySelectorAll('.original,.translation')].filter(l => getComputedStyle(l).display !== 'none');
+  const page = getComputedStyle(document.body);
+  const height = parseFloat(page.paddingTop) + parseFloat(page.paddingBottom)
+    + parseFloat(getComputedStyle($('subtitle')).rowGap) * (lines.length - 1)
+    + lines.reduce((sum, l) => sum + 2 * parseFloat(getComputedStyle(l.firstElementChild).lineHeight), 0);
+  invoke('fit_caption', { height: Math.ceil(height) });
+}
+
 function applySettings(settings) {
   applyStyle(settings.subtitle);
   subtitle.follow(settings.subtitle.show);
+  fitHeight();
 }
 
 function applyStatus(status) {

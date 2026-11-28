@@ -175,6 +175,18 @@ pub fn resize_island(app: AppHandle, engine: State<'_, Shared>, width: f64, heig
     windows::resize_island(&app, &engine.settings(), (width, height));
 }
 
+/// The caption page asks for the height its lines need; people choose only its width.
+#[tauri::command]
+pub fn fit_caption(app: AppHandle, engine: State<'_, Shared>, height: f64) -> Result<()> {
+    let s = engine.settings();
+    windows::fit_caption(&app, height);
+    if (s.caption_size.1 - height).abs() < 1.0 {
+        return Ok(());
+    }
+    let caption_size = (s.caption_size.0, height);
+    engine.save(Settings { caption_size, ..s })
+}
+
 #[tauri::command]
 pub fn drag_start(app: AppHandle, window: Floating) {
     windows::drag_start(&app, window);

@@ -78,7 +78,7 @@ Test notes:
 ## App shell (`app/`)
 
 - Windows:
-  - `caption`: Movie style subtitles on a transparent window, newest sentence only. It hides itself when quiet so it never blocks clicks. Look comes from `Settings::subtitle` (`SubtitleStyle`): `ui/caption/style.js` maps each field to a CSS variable, so a new option is one Rust field, one mapping line and one Settings control.
+  - `caption`: Subtitles on a transparent window, newest sentence only: original and translation each in a fixed two-line slot, left aligned, same size. The page asks for its height (`fit_caption`); people resize only its width. It hides itself when quiet so it never blocks clicks. Look comes from `Settings::subtitle` (`SubtitleStyle`): `ui/caption/style.js` maps each field to a CSS variable, so a new option is one Rust field, one mapping line and one Settings control.
   - `island`: Morph island controls. The window is resized to the island shape and grows away from the screen edge it is anchored to.
   - `settings`: created on demand, destroyed on close. A labelled sidebar; each area is one entry in `VIEWS` (`ui/settings/settings.js`), shown by URL hash.
 - Placement is pure geometry in `placement.rs` (multi-monitor, snap, never overlap) and has unit tests. It works in desktop units: points on macOS and Linux, pixels on Windows, where displays have their own scale (`Monitor::scale`); window sizes are points. `windows.rs` applies it. Dragging is manual (`ui/shared/drag.js` → `drag_start/move/end`), not Tauri drag regions. `watch_displays` re-arranges when displays change or wake; while every display sleeps the monitor list is empty.

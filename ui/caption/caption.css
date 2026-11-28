@@ -8,9 +8,9 @@ body.dragging .subtitle{cursor:grabbing}
 
 /* Each line is a fixed slot of two text lines, so nothing moves when the other one wraps or empties.
    Text starts at the left and grows to the right; subtitles.js slides it up a whole line when it outgrows its slot.
-   In a window too short for both, the original gives up its lines first. */
+   main.js makes the window exactly as tall as both slots; if a screen is too short even so, the original gives up its lines first. */
 .original,.translation{flex:0 1 auto;height:2.6em;min-height:0;padding:0 4px;overflow:hidden}
-.original{flex-shrink:100;font-size:.8em;opacity:.85}
+.original{flex-shrink:100;opacity:.85}
 .original span,.translation span{display:block;unicode-bidi:plaintext;text-align:start;transition:transform .18s var(--ease-out)}
 .original:has(span:empty),.translation:has(span:empty),.cramped{visibility:hidden}
 body[data-show=translation] .original,body[data-show=original] .translation{display:none}

@@ -143,6 +143,7 @@ fn main() {
             commands::show_settings,
             commands::set_visible,
             commands::resize_island,
+            commands::fit_caption,
             commands::drag_start,
             commands::drag_move,
             commands::drag_end,
