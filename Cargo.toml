@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "app"]
+exclude = ["vendor/fxtranslate"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,10 +16,12 @@ openlang-audio-coreaudio = { path = "crates/audio-coreaudio" }
 openlang-audio-cpal = { path = "crates/audio-cpal" }
 openlang-audio-dsp = { path = "crates/audio-dsp" }
 openlang-contract = { path = "crates/contract" }
+openlang-models = { path = "crates/models" }
 openlang-provider-openai = { path = "crates/provider-openai" }
 openlang-provider-whisper = { path = "crates/provider-whisper" }
 openlang-speech-chunks = { path = "crates/speech-chunks" }
 openlang-provider-apple = { path = "crates/provider-apple" }
+openlang-provider-bergamot = { path = "crates/provider-bergamot" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -31,3 +34,11 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
+
+# Patched copy: see vendor/fxtranslate/OPENLANG.md.
+[patch.crates-io]
+fxtranslate = { path = "vendor/fxtranslate" }
+
+# Translation decodes far too slowly unoptimized, even while developing.
+[profile.dev.package.fxtranslate]
+opt-level = 3

@@ -222,19 +222,40 @@ pub enum PrivacyPane {
     Microphone,
 }
 
+/// Opens the system's privacy settings for one kind of capture.
 #[tauri::command]
 pub fn open_privacy(pane: PrivacyPane) -> Result<()> {
-    let anchor = match pane {
-        PrivacyPane::SystemAudio => "Privacy_AudioCapture",
-        PrivacyPane::Microphone => "Privacy_Microphone",
-    };
-    std::process::Command::new("open")
-        .arg(format!(
-            "x-apple.systempreferences:com.apple.preference.security?{anchor}"
-        ))
+    let program = if cfg!(windows) { "explorer" } else { "open" };
+    std::process::Command::new(program)
+        .arg(privacy_page(pane)?)
         .spawn()
         .map(drop)
         .map_err(|e| Error::Config(e.to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn privacy_page(pane: PrivacyPane) -> Result<&'static str> {
+    Ok(match pane {
+        PrivacyPane::SystemAudio => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture"
+        }
+        PrivacyPane::Microphone => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+    })
+}
+
+/// Windows asks only about the microphone; recording the output needs no permission.
+#[cfg(windows)]
+fn privacy_page(_: PrivacyPane) -> Result<&'static str> {
+    Ok("ms-settings:privacy-microphone")
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn privacy_page(_: PrivacyPane) -> Result<&'static str> {
+    Err(Error::Config(
+        "this system has no privacy settings for audio".into(),
+    ))
 }
 
 pub fn toggle(app: &AppHandle) {

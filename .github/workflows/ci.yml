@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A build that silently fell back to the slow scalar translation kernel fails instead.
+  FXTRANSLATE_REQUIRE_SIMD: "1"
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libclang-dev pkg-config cmake \
+            libvulkan-dev glslc
+
+      # Whisper uses the graphics card through Vulkan.
+      - name: Vulkan SDK
+        if: runner.os == 'Windows'
+        uses: jakoch/install-vulkan-sdk-action@v1.8.1
+        with:
+          vulkan_version: 1.4.341.0
+          cache: true
+
+      # Shipped next to the app, so it starts on a PC without a Vulkan driver and falls back to
+      # the CPU. The tests run against it too, without any driver installed.
+      - name: Vulkan loader
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git clone --depth 1 --branch vulkan-sdk-1.4.341.0 https://github.com/KhronosGroup/Vulkan-Loader.git "$RUNNER_TEMP/loader"
+          cmake -S "$RUNNER_TEMP/loader" -B "$RUNNER_TEMP/loader/build" -D UPDATE_DEPS=ON -D BUILD_TESTS=OFF
+          cmake --build "$RUNNER_TEMP/loader/build" --config Release
+          cp "$RUNNER_TEMP/loader/build/loader/Release/vulkan-1.dll" app/vulkan-1.dll
+          echo "$GITHUB_WORKSPACE/app" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy -q --workspace --all-targets -- -D warnings
+
+      # Apple and Whisper provider tests speak with macOS `say`; the rest runs everywhere.
+      - name: Tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            cargo test --workspace --exclude openlang-provider-apple
+          else
+            cargo test --workspace
+          fi
+
+      - name: UI syntax
+        shell: bash
+        run: for f in ui/*/*.js; do node --check --input-type=module < "$f"; done
+
+      - name: Bundle
+        working-directory: app
+        run: npx --yes @tauri-apps/cli@2 build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenLang-${{ matrix.os }}
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error

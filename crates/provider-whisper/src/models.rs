@@ -1,11 +1,10 @@
-use std::{
-    fs::{self, File},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use openlang_core::{Error, Result, ports::Readiness};
-use sha2::{Digest, Sha256};
+use openlang_core::{
+    Error, Result, cpu,
+    ports::{Readiness, unsupported},
+};
+use openlang_models::Download;
 
 pub struct Model {
     pub id: &'static str,
@@ -41,10 +40,6 @@ pub fn find(id: &str) -> Result<&'static Model> {
         .ok_or_else(|| Error::Config(format!("model `{id}`")))
 }
 
-fn failed(e: impl std::fmt::Display) -> Error {
-    Error::Provider(format!("model download: {e}"))
-}
-
 impl Model {
     pub fn path(&self, directory: &Path) -> PathBuf {
         directory.join(format!("{}.bin", self.id))
@@ -52,6 +47,9 @@ impl Model {
 
     /// A file only gets its final name after its checksum matched.
     pub fn readiness(&self, directory: &Path) -> Readiness {
+        if let Err(e) = cpu::check() {
+            return unsupported(e.to_string());
+        }
         if self.path(directory).is_file() {
             return Readiness::Ready;
         }
@@ -61,46 +59,15 @@ impl Model {
     }
 
     pub fn download(&self, directory: &Path, progress: &dyn Fn(f32)) -> Result<()> {
-        fs::create_dir_all(directory).map_err(failed)?;
-        let part = directory.join(format!("{}.part", self.id));
-        let result = self.fetch(&part, progress);
-        if result.is_err() {
-            let _ = fs::remove_file(&part);
-            return result;
+        Download {
+            url: &format!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}.bin",
+                self.id
+            ),
+            bytes: self.bytes,
+            sha256: self.sha256,
+            gzip: false,
         }
-        fs::rename(&part, self.path(directory)).map_err(failed)
-    }
-
-    fn fetch(&self, part: &Path, progress: &dyn Fn(f32)) -> Result<()> {
-        let url = format!(
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}.bin",
-            self.id
-        );
-        let mut reply = ureq::get(url).call().map_err(failed)?;
-        let mut body = reply
-            .body_mut()
-            .with_config()
-            .limit(self.bytes + 1)
-            .reader();
-        let mut file = File::create(part).map_err(failed)?;
-        let mut hash = Sha256::new();
-        let mut buffer = vec![0; 256 * 1024];
-        let mut done = 0u64;
-        loop {
-            let n = body.read(&mut buffer).map_err(failed)?;
-            if n == 0 {
-                break;
-            }
-            hash.update(&buffer[..n]);
-            file.write_all(&buffer[..n]).map_err(failed)?;
-            done += n as u64;
-            progress(done as f32 / self.bytes as f32);
-        }
-        file.sync_all().map_err(failed)?;
-        let sum: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
-        if sum != self.sha256 {
-            return Err(failed("the file does not match its checksum"));
-        }
-        Ok(())
+        .fetch(&self.path(directory), progress)
     }
 }

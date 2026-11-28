@@ -17,6 +17,7 @@ use whisper_rs::{
 };
 
 pub fn register(registry: &mut Registry, models: PathBuf) {
+    openlang_models::remove_stale_parts(&models, 0);
     whisper_rs::install_logging_hooks();
     registry.stt.push(Arc::new(Whisper {
         descriptor: Descriptor {
@@ -86,6 +87,7 @@ fn failed(e: whisper_rs::WhisperError) -> Error {
 }
 
 fn load(model: &Path) -> Result<WhisperState> {
+    openlang_core::cpu::check()?;
     let mut params = WhisperContextParameters::default();
     params.flash_attn(true);
     WhisperContext::new_with_params(model, params)
