@@ -79,6 +79,8 @@ jobs:
       - name: clang-cl for whisper.cpp
         if: runner.os == 'Windows' && runner.arch == 'ARM64'
         run: |
+          # Git Bash's coreutils link would shadow MSVC's linker on PATH.
+          rm -f /usr/bin/link.exe
           echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
           echo "CMAKE_C_COMPILER=clang-cl" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang-cl" >> "$GITHUB_ENV"
