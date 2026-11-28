@@ -103,7 +103,6 @@ impl Segmenter {
                 start: offset + u.start,
                 end: offset + u.end,
                 is_final: u.is_final,
-                speaker: None,
             },
             language: u.language.unwrap_or_else(|| self.language.clone()),
             text: u.text,

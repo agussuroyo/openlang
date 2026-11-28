@@ -24,9 +24,9 @@ function group(title, rows, note) {
     h('div', { className: 'panel' }, ...rows),
     note && h('p', { className: 'note', textContent: note }));
 }
-function words(title, note, tone = '') {
+function words(title, note) {
   return h('span', { className: 'words' }, h('span', { className: 'title', textContent: title }),
-    note && h('span', { className: `sub ${tone}`, textContent: note }));
+    note && h('span', { className: 'sub', textContent: note }));
 }
 // A label row makes the whole line clickable for its control.
 const row = (title, note, control) => h('label', { className: 'row' }, words(title, note), control);

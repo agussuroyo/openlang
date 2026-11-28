@@ -48,7 +48,6 @@ mod tests {
                 start: Default::default(),
                 end: Default::default(),
                 is_final,
-                speaker: None,
             },
             source: String::new(),
             language: "id".into(),

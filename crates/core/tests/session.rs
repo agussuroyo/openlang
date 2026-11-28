@@ -361,7 +361,7 @@ fn events_survive_serialization() {
     run(plan(&["stt"], &["good"]), vec![rec.clone()], &[]);
     for e in rec.0.lock().unwrap().iter() {
         let json = serde_json::to_string(e).unwrap();
-        assert!(json.contains("\"schema\":1"));
+        assert!(json.contains(&format!("\"schema\":{EVENT_SCHEMA}")));
         assert_eq!(&serde_json::from_str::<SessionEvent>(&json).unwrap(), e);
     }
 }
@@ -547,7 +547,6 @@ fn cancel_does_not_wait_for_queued_work() {
                     start: Duration::ZERO,
                     end: Duration::ZERO,
                     is_final: true,
-                    speaker: None,
                 },
                 source: String::new(),
                 language: "id".into(),
@@ -679,7 +678,6 @@ fn transcript_of(id: SegmentId, text: &str, is_final: bool) -> Packet {
             start: Duration::ZERO,
             end: Duration::ZERO,
             is_final,
-            speaker: None,
         },
         language: "en-US".into(),
         text: text.into(),

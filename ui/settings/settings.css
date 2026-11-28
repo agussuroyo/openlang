@@ -40,7 +40,6 @@ label.row,.row.link{cursor:pointer}
 .words{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .title{font-size:14px;font-weight:500}
 .sub{font-size:13px;line-height:1.4;color:var(--muted)}
-.sub.bad{color:var(--warn)}
 .glyph{display:grid;flex:none;color:var(--muted)}
 .glyph svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 

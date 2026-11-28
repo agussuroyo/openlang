@@ -6,7 +6,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, Ordering::SeqCst},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -261,15 +261,14 @@ impl GraphBuilder {
             emitters.push(out);
         }
 
-        let failed = Arc::new(AtomicUsize::new(0));
         let threads = self
             .slots
             .into_iter()
             .zip(emitters)
             .zip(&queues)
             .map(|((slot, out), queue)| {
-                let (queue, failed) = (queue.clone(), failed.clone());
-                std::thread::spawn(move || run(slot.node, out, &queue, &failed))
+                let queue = queue.clone();
+                std::thread::spawn(move || run(slot.node, out, &queue))
             })
             .collect();
         Ok(Graph {
@@ -277,19 +276,17 @@ impl GraphBuilder {
             queues,
             threads,
             cancelled,
-            failed,
             closed: false,
         })
     }
 }
 
-fn run(mut node: Box<dyn Node>, out: Emitter, queue: &Queue, failed: &AtomicUsize) {
+fn run(mut node: Box<dyn Node>, out: Emitter, queue: &Queue) {
     let mut alive = true;
     let guarded = |node: &mut Box<dyn Node>, f: &mut dyn FnMut(&mut dyn Node) -> Result<()>| {
         let result = catch_unwind(AssertUnwindSafe(|| f(node.as_mut())))
             .unwrap_or_else(|_| Err(Error::Graph("node panicked".into())));
         if let Err(e) = result {
-            failed.fetch_add(1, SeqCst);
             out.report(e);
             return false;
         }
@@ -314,17 +311,12 @@ pub struct Graph {
     queues: Vec<Arc<Queue>>,
     threads: Vec<JoinHandle<()>>,
     cancelled: Arc<AtomicBool>,
-    failed: Arc<AtomicUsize>,
     closed: bool,
 }
 
 impl Graph {
     pub fn input(&self) -> Emitter {
         self.input.clone()
-    }
-
-    pub fn failures(&self) -> usize {
-        self.failed.load(SeqCst)
     }
 
     /// Lets every queued packet and every final segment through, then stops.

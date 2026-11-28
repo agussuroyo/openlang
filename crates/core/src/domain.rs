@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Bump when a serialized event changes shape, so stored history stays readable.
-pub const EVENT_SCHEMA: u32 = 1;
+pub const EVENT_SCHEMA: u32 = 2;
 
 macro_rules! id {
     ($name:ident) => {
@@ -62,7 +62,6 @@ pub struct Segment {
     pub start: Duration,
     pub end: Duration,
     pub is_final: bool,
-    pub speaker: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

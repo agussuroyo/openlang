@@ -3,7 +3,6 @@ use std::sync::Arc;
 use openlang_core::{
     Error, Result,
     auto_language::to_prepare,
-    domain::Origin,
     ports::{Descriptor, FieldKind, Job, Languages, Location, Provider, Readiness},
 };
 use serde::{Deserialize, Serialize};
@@ -21,7 +20,6 @@ pub type Shared = Arc<Engine>;
 #[derive(Serialize)]
 pub struct SourceInfo {
     descriptor: Descriptor,
-    origin: Origin,
 }
 
 #[derive(Serialize)]
@@ -37,7 +35,6 @@ pub struct ProviderInfo {
 #[derive(Serialize)]
 pub struct Snapshot {
     settings: Settings,
-    status: Status,
     sources: Vec<SourceInfo>,
     stt: Vec<ProviderInfo>,
     translators: Vec<ProviderInfo>,
@@ -96,7 +93,6 @@ pub async fn snapshot(engine: State<'_, Shared>) -> Result<Snapshot> {
                 .iter()
                 .map(|x| SourceInfo {
                     descriptor: x.descriptor().clone(),
-                    origin: x.origin(),
                 })
                 .collect(),
             stt: e
@@ -111,7 +107,6 @@ pub async fn snapshot(engine: State<'_, Shared>) -> Result<Snapshot> {
                 .iter()
                 .map(|p| info(&e, &s, p.as_ref(), None))
                 .collect::<Result<_>>()?,
-            status: e.status(),
             settings: s,
         })
     })

@@ -75,10 +75,6 @@ impl AudioReader {
         }
     }
 
-    pub fn available(&self) -> usize {
-        self.ring.slots()
-    }
-
     pub fn take_lost(&self) -> u64 {
         self.shared.lost.swap(0, Relaxed)
     }
