@@ -1,11 +1,11 @@
-import { invoke, listen, short, explain } from '../shared/app.js';
+import { invoke, listen, short, explain, isMac } from '../shared/app.js';
 import { draggable } from '../shared/drag.js';
 import { createIsland } from './island.js';
 import { soundBars } from './bars.js';
 
 const PAD = 10;   // room around the island for its overshoot
 const $ = id => document.getElementById(id);
-let settings, status = { state: 'idle' }, startedAt = 0, ticking = null, waiting = null, collapse = null, settle = null;
+let settings, status = { state: 'idle' }, startedAt = 0, ticking = null, waiting = null, collapse = null, settle = null, fetching = null;
 let size = [0, 0], problem = false;
 
 // The window is only as big as the island, so it never blocks clicks around it.
@@ -79,7 +79,7 @@ function applyStatus(next) {
   if (next.state === 'starting') {
     $('startText').textContent = 'Starting';
     // Capture blocks while macOS waits for an answer to its permission dialog.
-    waiting = setTimeout(() => { $('startText').textContent = 'Check the macOS prompt'; }, 5000);
+    if (isMac) waiting = setTimeout(() => { $('startText').textContent = 'Check the macOS prompt'; }, 5000);
   }
   island.go(next.state);
   visibility();
@@ -90,6 +90,12 @@ function onEvent({ type, data }) {
     if (settings.sound_bars) bars.set(data.origin, data.level);
   } else if (type === 'silent') {
     $('note').textContent = data.silent ? 'No sound yet. Check permission.' : 'Listening';
+  } else if (type === 'failed' && data.error?.code === 'model_missing' && status.state === 'listening') {
+    // A newly heard language fetches its model while captions go on. Each sentence reports it
+    // again until the model is there, so a quiet while means it arrived.
+    $('note').textContent = 'Getting the model for this language';
+    clearTimeout(fetching);
+    fetching = setTimeout(() => { if (status.state === 'listening') $('note').textContent = 'Listening'; }, 8000);
   } else if (type === 'failed') {
     fail(data.error);
   }
