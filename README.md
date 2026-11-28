@@ -1,102 +1,119 @@
 # OpenLang
 
-Terjemahan langsung untuk suara apa pun di Mac, Windows, dan Linux: film, Meet, Zoom, Teams,
-rekaman, dan mikrofon. Mesin bawaannya gratis dan berjalan di komputer ini: Apple di Mac, Whisper
-dan Bergamot (model terjemahan Firefox dari Mozilla) di semua OS. Audio dan teks tidak disimpan.
+Live subtitles and translation for anything your computer plays or hears: films, Meet, Zoom,
+Teams, recordings and your microphone. It runs on macOS, Windows and Linux, free and on your own
+computer. OpenLang does not save audio or text.
 
-## Menjalankan
+| | Speech to text | Translation |
+|---|---|---|
+| macOS 26+ | Apple Speech (default) or Whisper | Apple Translate (default) or Bergamot |
+| Windows, Linux | Whisper | Bergamot (Mozilla's Firefox Translations models) |
+| Optional, any OS | OpenAI-compatible services | OpenAI-compatible services |
 
-Butuh Rust, Node (hanya untuk CLI build), `make`, dan `cmake` (hanya untuk Whisper).
+Whisper and Bergamot download their models the first time you need them. Cloud services
+(OpenAI, DeepSeek, OpenRouter, Kimi, Z.ai GLM or any OpenAI-compatible address) stay off until
+you allow network use in Settings; their keys go to the system keychain.
 
-- macOS 26+ (Apple Silicon atau Intel): Xcode.
-- Linux: `libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
-  librsvg2-dev libclang-dev libvulkan-dev glslc` (header Vulkan 1.3.275+, misalnya Ubuntu 24.04
-  atau Debian 13). Kunci API disimpan di Secret Service: GNOME Keyring atau KWallet.
-- Windows (x64 atau ARM): Vulkan SDK, `make`, dan `app/vulkan-1.dll` yang dibangun dari Khronos
-  Vulkan-Loader (lihat `.github/workflows/ci.yml`). Jalankan `make` dari Git Bash. Di ARM,
-  whisper.cpp dibangun dengan clang-cl di dalam lingkungan MSVC arm64: `CMAKE_GENERATOR=Ninja
-  CMAKE_C_COMPILER=clang-cl CMAKE_CXX_COMPILER=clang-cl CXXFLAGS_aarch64_pc_windows_msvc=-EHsc`. Prosesor x86_64 perlu AVX2.
+## Install
 
-```sh
-make            # daftar perintah
-make build      # .app dan .dmg, .exe (NSIS), atau .deb dan .AppImage
-make run        # build, lalu buka
-make install    # build, lalu pasang: /Applications, installer Windows, atau apt
-make check      # format, lint, sintaks UI
-make test       # semua uji
-```
+There are no published releases yet. Build it yourself (see [Build](#build)) with
+`make install`, or download the `OpenLang-<os>` artifact from a green CI run.
 
-CI menjalankan perintah `make` yang sama di macOS (Apple Silicon dan Intel), Linux (x64 dan ARM),
-dan Windows (x64 dan ARM); hasil build ada di artifact tiap job.
+### First launch
 
-Start/Stop: Control+Option+Shift+Space di Mac, Ctrl+Alt+Shift+Space di Windows dan Linux (bisa
-diganti di Settings > Controls), tombol di island, atau menu OpenLang di menu bar atau system tray.
-Izin macOS melekat pada tanda tangan app. Build ad-hoc baru akan ditanya izin lagi.
+The builds are not signed with a paid certificate, so macOS and Windows ask once:
 
-Sejak identifier `dev.openlang.desktop`, settings dan model dari `dev.openlang.app` dipindahkan
-sekali saat app dibuka; macOS menanyakan izin audio dan mikrofon sekali lagi. Di Windows model
-disimpan di AppData Local, bukan Roaming.
+- **macOS:** open the `.dmg` and drag OpenLang to Applications. Right-click OpenLang, choose Open,
+  then Open again. Or run `xattr -dr com.apple.quarantine /Applications/OpenLang.app`. On the
+  first Start, allow system audio and microphone access.
+- **Windows:** run the `.exe` installer. At "Windows protected your PC", click More info, then
+  Run anyway.
+- **Linux:** `sudo apt install ./OpenLang_*.deb`, or `chmod +x OpenLang_*.AppImage` and run it.
+  No warning appears.
 
-## Membuka pertama kali
+After that, OpenLang opens like any other app.
 
-Build OpenLang gratis dan tidak ditandatangani (tanpa sertifikat berbayar), jadi sistem bertanya
-sekali saat pertama dibuka:
+## Use
 
-- macOS: buka `.dmg`, seret OpenLang ke Applications, lalu klik kanan OpenLang > Open > Open.
-  Atau lewat Terminal: `xattr -dr com.apple.quarantine /Applications/OpenLang.app`.
-  Saat Start pertama, izinkan audio sistem dan mikrofon.
-- Windows: jalankan installer `.exe`; di "Windows protected your PC" klik More info > Run anyway.
-- Linux: `sudo apt install ./OpenLang_*.deb`, atau jadikan AppImage bisa dijalankan:
-  `chmod +x OpenLang_*.AppImage`. Tidak ada peringatan.
+OpenLang shows two floating windows: the subtitles, and a small control island with Start/Stop.
 
-Setelah itu OpenLang terbuka seperti app biasa.
+Start or stop listening from any app with **Control+Option+Shift+Space** on macOS or
+**Ctrl+Alt+Shift+Space** on Windows and Linux. The island button and the OpenLang menu in the
+menu bar or system tray do the same.
 
-## Susunan
+Settings has five areas:
 
-| Folder | Isi |
+| Area | What you set |
 |---|---|
-| `crates/core` | Domain, port, graf, sesi. Tidak mengenal OS, UI, atau provider |
-| `crates/audio-*` | Audio sistem (Mac, Windows, Linux), mikrofon, resampler |
+| Translate | The spoken language (Auto by default) and the language to read |
+| Listen | System audio, microphone, or both, and links to the system privacy pages |
+| Subtitles | Text size, original and/or translation, click-through, position |
+| Controls | When the island shows, sound bars, position, the shortcut |
+| Engines | Which engine hears and which translates, network use, API keys |
+
+## Build
+
+You need Rust, Node (for the Tauri CLI), `make`, and `cmake` (for Whisper).
+
+- **macOS 26+**, Apple Silicon or Intel: Xcode.
+- **Linux**: `libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+  librsvg2-dev libclang-dev libvulkan-dev glslc`, with Vulkan headers 1.3.275 or newer (Ubuntu
+  24.04, Debian 13). API keys are stored through Secret Service (GNOME Keyring or KWallet).
+- **Windows**, x64 or ARM: the Vulkan SDK, `make`, and `app/vulkan-1.dll` built from Khronos
+  Vulkan-Loader. Run `make` from Git Bash. ARM needs clang-cl for whisper.cpp; the exact
+  environment is in `.github/workflows/ci.yml`.
+- x86_64 processors need AVX2.
+
+| Command | Does |
+|---|---|
+| `make` | Lists the commands |
+| `make build` | `.app` and `.dmg`, `.exe` (NSIS), or `.deb` and `.AppImage` |
+| `make run` | Builds, then opens it |
+| `make install` | Builds, then installs to /Applications, runs the Windows installer, or uses apt |
+| `make check` | Format check, clippy, UI syntax |
+| `make test` | All tests; `ARGS=...` passes more arguments to `cargo test` |
+
+CI runs these same targets on macOS (Apple Silicon and Intel), Linux (x64 and ARM) and Windows
+(x64 and ARM).
+
+macOS ties audio and microphone permission to the app's signature, so it asks again after every
+ad-hoc rebuild.
+
+## Develop
+
+| Folder | Contents |
+|---|---|
+| `crates/core` | Domain types, ports, processing graph, sessions. No OS, UI or provider code |
+| `crates/audio-*` | System audio (Core Audio on macOS, cpal elsewhere), microphone, resampling |
 | `crates/provider-*` | Apple, Whisper, Bergamot, OpenAI-compatible |
-| `crates/models` | Unduhan model yang diverifikasi sha256 |
-| `vendor/fxtranslate` | Mesin Bergamot, sudah ditambal (`OPENLANG.md`) |
-| `crates/speech-chunks` | Potong suara per ucapan, untuk mesin non-streaming |
-| `crates/contract` | Uji yang sama untuk semua provider |
-| `app` | Shell Tauri. `app/src/modules.rs` = satu-satunya daftar modul |
-| `ui` | HTML/CSS/JS tanpa bundler |
+| `crates/speech-chunks` | Cuts speech at pauses for engines that do not stream |
+| `crates/models` | Model downloads checked by sha256 |
+| `crates/contract` | The test suite every provider must pass |
+| `vendor/fxtranslate` | Bergamot engine, patched (see `OPENLANG.md` there) |
+| `app` | Tauri shell. `app/src/modules.rs` is the only list of modules |
+| `ui` | Plain HTML, CSS and JS, no bundler |
 
-## Pasang atau copot modul
+To leave a module out, build without its feature, for example
+`cargo build -p openlang --no-default-features --features apple,coreaudio`. Features: `apple`,
+`bergamot`, `coreaudio`, `cpal`, `openai`, `whisper`.
 
-Copot: matikan fitur, misalnya `--no-default-features --features apple,coreaudio`.
+To add one, write a crate that implements `SpeechToText`, `Translator` or `AudioSource` and
+exposes `register`, then add one feature to `app/Cargo.toml` and one line to `modules.rs`. The
+Settings page draws itself from the module's `Descriptor`, so the UI needs no change.
 
-Pasang: buat crate yang mengimplementasikan `SpeechToText`, `Translator`, atau `AudioSource`, beri
-fungsi `register`, lalu tambahkan satu fitur di `app/Cargo.toml` dan satu baris di `modules.rs`.
-Settings digambar dari `Descriptor`, jadi UI tidak perlu diubah.
+To add a new branch to the pipeline, such as spoken translation or history, implement
+`Extension` or `EventSink`. `crates/core/tests/session.rs` shows both.
 
-Cabang baru (suara terjemahan, history, notulen): implementasikan `Extension` atau `EventSink`.
-Contohnya ada di `crates/core/tests/session.rs`. Keduanya belum ada di aplikasi.
+Tests that speak with `say` run only on macOS. The first `make test` downloads about 60 MB of
+Whisper and 120 MB of Bergamot models. Architecture notes live in `CLAUDE.md`.
 
-## Uji
+## Known limits
 
-```sh
-make test   # memakai `say` di Mac; mengunduh model Whisper 60 MB dan Bergamot 120 MB sekali
-```
-
-Uji yang memakai `say` hanya berjalan di Mac; Whisper tetap dimuat dan diuji tanpa suara di
-Windows dan Linux.
-
-## Batasan
-
-- Windows hanya diuji di CI (tanpa GPU dan tanpa perangkat audio). Linux diuji di CI dan Docker.
-- Di Linux Wayland, app berjalan lewat XWayland (`GDK_BACKEND=x11`) agar jendela bisa diletakkan,
-  tetap di atas, dan shortcut global bekerja. Set `GDK_BACKEND` sendiri untuk memilih lain.
-- Windows tidak memindahkan subtitle ke virtual desktop lain.
-- Build tidak ditandatangani: macOS dan Windows bertanya sekali saat pertama dibuka (lihat
-  "Membuka pertama kali").
-- Di Windows dan Linux, Whisper memakai GPU lewat Vulkan; tanpa GPU sekitar 1 detik per kalimat.
-- Loopback Windows dan monitor Linux juga mendengar suara aplikasi ini sendiri (saat ini tidak ada).
-- Apple Speech tidak mendeteksi bahasa; pilih bahasanya, atau pakai Whisper.
-- Pembicara di audio sistem tidak dipisahkan.
-- Ikon aplikasi masih placeholder polos.
-
-Gerak Morph island dan Bottom bar mengikuti https://designbookmark.com/motion.
+- Apple Speech cannot detect the language. Auto picks it with a small Whisper model, which takes
+  a few seconds of speech; you can also set the language yourself.
+- Speakers are not told apart.
+- Windows is tested only in CI, without a GPU or audio device. Linux is tested in CI and Docker.
+- Without a GPU, Whisper takes about 1 second per sentence.
+- On Wayland, OpenLang runs through XWayland (`GDK_BACKEND=x11`) so its windows can place
+  themselves, stay on top and use the global shortcut. Set `GDK_BACKEND` yourself to override.
+- On Windows, the subtitles do not follow you to another virtual desktop.
