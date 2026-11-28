@@ -1,0 +1,2 @@
+# One line ending everywhere, so a Windows checkout builds and diffs like the others.
+* text=auto eol=lf

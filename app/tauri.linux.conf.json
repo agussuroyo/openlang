@@ -3,7 +3,8 @@
     "targets": ["deb", "appimage"],
     "linux": {
       "deb": {
-        "depends": ["libvulkan1"]
+        "depends": ["libvulkan1", "libasound2"],
+        "recommends": ["gnome-keyring | kwalletmanager"]
       }
     }
   }

@@ -15,8 +15,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
+        include:
+          # Apple's speech and translation tests need a person's Mac: they wait on system
+          # downloads and dialogs.
+          - os: macos-26
+            test: --exclude openlang-provider-apple
+          - os: macos-26-intel
+            test: --exclude openlang-provider-apple
+          - os: ubuntu-24.04
+          - os: ubuntu-24.04-arm
+          - os: windows-2025
+          - os: windows-11-arm
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -28,9 +41,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libclang-dev pkg-config cmake \
+          sudo apt-get install -y libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libclang-dev pkg-config cmake \
             libvulkan-dev glslc
+
+      - name: make
+        if: runner.os == 'Windows'
+        run: choco install make -y --no-progress
 
       # Whisper uses the graphics card through Vulkan.
       - name: Vulkan SDK
@@ -44,7 +61,6 @@ jobs:
       # the CPU. The tests run against it too, without any driver installed.
       - name: Vulkan loader
         if: runner.os == 'Windows'
-        shell: bash
         run: |
           git clone --depth 1 --branch vulkan-sdk-1.4.341.0 https://github.com/KhronosGroup/Vulkan-Loader.git "$RUNNER_TEMP/loader"
           cmake -S "$RUNNER_TEMP/loader" -B "$RUNNER_TEMP/loader/build" -D UPDATE_DEPS=ON -D BUILD_TESTS=OFF
@@ -52,35 +68,25 @@ jobs:
           cp "$RUNNER_TEMP/loader/build/loader/Release/vulkan-1.dll" app/vulkan-1.dll
           echo "$GITHUB_WORKSPACE/app" >> "$GITHUB_PATH"
 
+      # ggml refuses MSVC on ARM; Visual Studio's clang-cl builds it.
+      - name: clang-cl for whisper.cpp
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        run: echo "CMAKE_GENERATOR_TOOLSET=ClangCL" >> "$GITHUB_ENV"
+
       # whisper.cpp's Vulkan shader build nests deep enough to pass the 260 character path
-      # limit of MSBuild's file tracker under the default target directory.
+      # limit of MSBuild's file tracker under the default target directory. The Makefile uses
+      # the same directory; it is set here too so the cache and the upload find it.
       - name: Short target directory
         if: runner.os == 'Windows'
-        shell: bash
         run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> ${{ env.CARGO_TARGET_DIR || 'target' }}"
 
-      - run: cargo fmt --all --check
-      - run: cargo clippy -q --workspace --all-targets -- -D warnings
-
-      # Apple and Whisper provider tests speak with macOS `say`; the rest runs everywhere.
-      - name: Tests
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = macOS ]; then
-            cargo test --workspace --exclude openlang-provider-apple
-          else
-            cargo test --workspace
-          fi
-
-      - name: UI syntax
-        shell: bash
-        run: for f in ui/*/*.js; do node --check --input-type=module < "$f"; done
-
-      - name: Bundle
-        working-directory: app
-        run: npx --yes @tauri-apps/cli@2 build
+      - run: make check
+      - run: make test ARGS="${{ matrix.test }}"
+      - run: make build
 
       - uses: actions/upload-artifact@v4
         with:

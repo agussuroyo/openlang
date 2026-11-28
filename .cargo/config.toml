@@ -5,6 +5,13 @@ MACOSX_DEPLOYMENT_TARGET = "26.0"
 # M1, Snapdragon X); `openlang_core::cpu` checks it at run time.
 GGML_NATIVE = "OFF"
 GGML_CPU_ARM_ARCH = "armv8.2-a+dotprod+fp16"
+# Named, not left to ggml: it turns them on by itself only for a native, non-cross build without
+# SOURCE_DATE_EPOCH. Arm builds ignore them.
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_BMI2 = "ON"
 
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]
