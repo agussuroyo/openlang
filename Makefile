@@ -80,7 +80,8 @@ conventions:
 	@branch="$${BRANCH:-$$(git rev-parse --abbrev-ref HEAD)}"; bad=0; \
 	if [ "$$branch" != main ] && ! printf '%s\n' "$$branch" | grep -Eq '^($(TYPES))/[a-z0-9]+(-[a-z0-9]+)*$$'; then \
 	  echo "branch, want type/kebab-name: $$branch"; bad=1; fi; \
-	wrong=$$( { git log --no-merges --format=%s $(BASE)..HEAD; printf '%s\n' "$$TITLE"; } \
+	subjects=$$(git log --no-merges --format=%s $(BASE)..HEAD) || exit 1; \
+	wrong=$$(printf '%s\n%s\n' "$$subjects" "$$TITLE" \
 	  | awk -v re='^($(TYPES))([(][a-z0-9-]+[)])?!?: [a-z0-9](.*[^.])?$$' 'NF && (!($$0 ~ re) || length > 72)'); \
 	if [ -n "$$wrong" ]; then echo "subject, want type(scope): summary, 72 characters at most:"; \
 	  printf '%s\n' "$$wrong" | sed 's/^/  /'; bad=1; fi; \
