@@ -1,4 +1,4 @@
-import { invoke, listen, languageName, explain, isMac, hotkeyName, trayName } from '../shared/app.js';
+import { invoke, listen, languageName, explain, isMac, platform, trayName, keyCaps } from '../shared/app.js';
 
 const $ = id => document.getElementById(id);
 let data;
@@ -59,8 +59,27 @@ function segmented(label, options, value, onchange) {
   }));
 }
 const badge = (tone, text) => h('span', { className: `badge ${tone}` }, h('i'), text);
-function keys(...names) {
-  return h('span', { className: 'keys', ariaLabel: hotkeyName }, ...names.map(k => h('kbd', { textContent: k })));
+// Shows a shortcut; press it, then type the new keys. Escape or leaving keeps the old one.
+function recorder(value, onchange) {
+  const el = h('button', { type: 'button', className: 'keys record', ariaLabel: `${keyCaps(value).join(' ')}, press to change` });
+  let recording = false;
+  const show = shortcut => el.replaceChildren(...shortcut
+    ? keyCaps(shortcut).map(k => h('kbd', { textContent: k }))
+    : [h('span', { className: 'sub', textContent: 'Type the new keys' })]);
+  const end = () => { recording = false; show(value); };
+  el.addEventListener('click', () => { recording = true; show(null); });
+  el.addEventListener('blur', end);
+  el.addEventListener('keydown', e => {
+    if (!recording) return;
+    e.preventDefault();
+    if (e.key === 'Escape') return end();
+    if (/^(Control|Shift|Alt|Meta|OS)/.test(e.code)) return;
+    const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Super'];
+    recording = false;
+    onchange([...mods.filter(Boolean), e.code].join('+'));
+  });
+  show(value);
+  return el;
 }
 
 function problem(error) {
@@ -118,6 +137,10 @@ function translate() {
   ];
 }
 
+const PRIVACY = {
+  system_audio: ['System audio', 'Needed to hear films and calls.'],
+  microphone: ['Microphone', 'Needed to hear your voice.'],
+};
 function audio() {
   const s = data.settings;
   const source = ({ descriptor: d }) => row(d.name, d.summary, toggle(s.sources.includes(d.id), (on, box) => {
@@ -127,12 +150,12 @@ function audio() {
     save({ sources: next });
   }));
   const privacy = pane => () => invoke('open_privacy', { pane }).catch(problem);
+  const pages = platform.privacy.map(pane => link(...PRIVACY[pane], privacy(pane)));
   return [
     group('Sources', data.sources.map(source), 'Keep at least one source on.'),
-    isMac && group('Permissions', [
-      link('System audio', 'Needed to hear films and calls.', privacy('system_audio')),
-      link('Microphone', 'Needed to hear your voice.', privacy('microphone')),
-    ], 'macOS asks the first time each source is used.'),
+    pages.length && group('Permissions', pages, isMac
+      ? 'macOS asks the first time each source is used.'
+      : 'Windows blocks the microphone while its privacy setting is off.'),
   ];
 }
 
@@ -213,8 +236,10 @@ function controls() {
         toggle(s.sound_bars, v => save({ sound_bars: v }))),
     ]),
     group('Position', [placeRow('island')]),
-    group('Shortcut', [info('Start or stop', `Works in any app, or use OpenLang in ${trayName}.`,
-      isMac ? keys('⌃', '⌥', 'L') : keys('Ctrl', 'Alt', 'L'))]),
+    group('Shortcut', [info('Start or stop', data.hotkey_works
+      ? `Works in any app, or use OpenLang in ${trayName}.`
+      : 'Another app uses this shortcut. Press it to choose another.',
+    recorder(s.hotkey, v => save({ hotkey: v }, true)))]),
   ];
 }
 

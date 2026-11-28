@@ -32,6 +32,8 @@ pub struct Settings {
     pub island_mode: IslandMode,
     /// Three bars on the controls that move with the sound while listening.
     pub sound_bars: bool,
+    /// Starts and stops from any app, in the format of `hotkey::parse`.
+    pub hotkey: String,
 }
 
 /// How subtitles look. The caption window turns each field into CSS.
@@ -115,6 +117,7 @@ impl Default for Settings {
             island_place: Place::preset(Edge::End, Edge::Start),
             island_mode: IslandMode::Always,
             sound_bars: true,
+            hotkey: crate::hotkey::DEFAULT.into(),
         }
     }
 }
@@ -153,6 +156,9 @@ impl Settings {
                 .collect::<Vec<_>>(),
         );
         self.subtitle = self.subtitle.fit();
+        if crate::hotkey::parse(&self.hotkey).is_err() {
+            self.hotkey = crate::hotkey::DEFAULT.into();
+        }
         self
     }
 
@@ -168,6 +174,7 @@ impl Settings {
                 island_place: d.island_place,
                 island_mode: d.island_mode,
                 sound_bars: d.sound_bars,
+                hotkey: d.hotkey,
                 ..s.clone()
             }
         };
@@ -312,7 +319,15 @@ impl SecretStore for Keychain {
 }
 
 fn failed(e: keyring::Error) -> Error {
-    Error::Config(format!("keychain: {e}"))
+    match e {
+        keyring::Error::NoStorageAccess(_) | keyring::Error::PlatformFailure(_) => {
+            Error::Config(format!(
+                "no system keychain to keep keys in ({e}). On Linux, install and unlock \
+                 GNOME Keyring or KWallet"
+            ))
+        }
+        e => Error::Config(format!("keychain: {e}")),
+    }
 }
 
 #[cfg(test)]
@@ -382,10 +397,25 @@ mod tests {
             sound_bars: false,
             ..a.clone()
         }));
+        assert!(!a.pipeline_differs(&Settings {
+            hotkey: "Ctrl+Alt+KeyT".into(),
+            ..a.clone()
+        }));
         assert!(a.pipeline_differs(&Settings {
             target_language: "ja".into(),
             ..a.clone()
         }));
+    }
+
+    #[test]
+    fn an_unusable_hotkey_falls_back_to_the_default() {
+        let registry = crate::modules::registry(&std::env::temp_dir());
+        let fitted = Settings {
+            hotkey: "KeyL".into(),
+            ..Settings::default()
+        }
+        .fit(&registry);
+        assert_eq!(fitted.hotkey, crate::hotkey::DEFAULT);
     }
 
     #[test]

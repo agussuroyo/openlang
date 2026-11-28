@@ -14,6 +14,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
+    hotkey,
     settings::{Settings, SettingsFile},
     windows::{self, Floating},
 };
@@ -189,6 +190,10 @@ impl Engine {
     }
 
     pub fn save(&self, new: Settings) -> Result<()> {
+        let current = self.settings().hotkey;
+        if current != new.hotkey {
+            hotkey::replace(&self.app, Some(&current), &new.hotkey)?;
+        }
         self.file.save(&new)?;
         let old = std::mem::replace(&mut *lock(&self.settings), new.clone());
         let _ = self.app.emit("settings", &new);
