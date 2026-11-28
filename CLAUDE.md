@@ -76,7 +76,7 @@ Test notes:
 - Windows:
   - `caption`: Movie style subtitles on a transparent window, newest sentence only. It hides itself when quiet so it never blocks clicks. Look comes from `Settings::subtitle` (`SubtitleStyle`): `ui/caption/style.js` maps each field to a CSS variable, so a new option is one Rust field, one mapping line and one Settings control.
   - `island`: Morph island controls. The window is resized to the island shape and grows away from the screen edge it is anchored to.
-  - `settings`: created on demand, destroyed on close.
+  - `settings`: created on demand, destroyed on close. A labelled sidebar; each area is one entry in `VIEWS` (`ui/settings/settings.js`), shown by URL hash.
 - Placement is pure geometry in `placement.rs` (logical points, multi-monitor, snap, never overlap) and has unit tests. `windows.rs` applies it. Dragging is manual (`ui/shared/drag.js` → `drag_start/move/end`), not Tauri drag regions. `watch_displays` re-arranges when displays change or wake; while every display sleeps the monitor list is empty.
 - The accessory activation policy must be set in `run()` before windows exist. Otherwise the floating windows cannot appear over other apps' full-screen spaces. `windows::float` sets the collection behaviour and level.
 - `engine.rs` serializes start/stop through one mutex. `toggle` uses `try_lock` so presses made while start waits on a macOS permission dialog do not pile up.
@@ -87,7 +87,7 @@ Test notes:
 - No bundler and no dependencies. ES modules use `window.__TAURI__` (`withGlobalTauri`).
 - `shared/tokens.css` is the single source for colours (light and dark), radii, depth, easing, the subtitle outline and spring values ("stiffness damping").
 - `shared/motion.js` is a spring engine with one rAF loop that sleeps when everything is at rest. Keep it sleeping when idle.
-- Component motion follows https://designbookmark.com/motion. Morph island and Bottom bar keep their original spring values.
+- Component motion follows https://designbookmark.com/motion. Morph island keeps its original spring values.
 
 ## macOS gotchas
 

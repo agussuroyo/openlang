@@ -214,8 +214,8 @@ pub fn show_settings(app: &AppHandle) -> Result<()> {
             WebviewUrl::App("settings/index.html".into()),
         ))
         .title("OpenLang Settings")
-        .inner_size(520.0, 640.0)
-        .min_inner_size(400.0, 520.0)
+        .inner_size(760.0, 600.0)
+        .min_inner_size(640.0, 480.0)
         .build()
         .map_err(fail)?,
     };
