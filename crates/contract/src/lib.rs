@@ -1,7 +1,6 @@
 //! What every provider must do, checked the same way for all of them. Used by tests only.
 
 use std::{
-    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering::SeqCst},
@@ -19,7 +18,9 @@ use openlang_core::{
 };
 
 /// 16 kHz mono speech made by macOS `say`.
+#[cfg(target_os = "macos")]
 pub fn speak(voice: &str, text: &str) -> Vec<f32> {
+    use std::process::Command;
     let path = std::env::temp_dir().join(format!("openlang-{}.wav", SegmentId::new().0));
     let status = Command::new("say")
         .args([
@@ -231,8 +232,16 @@ pub fn latency(
     registry.stt.push(stt);
     registry.translators.push(translator);
     let cores = std::thread::available_parallelism().map_or(4, usize::from);
+    let done = Arc::new(AtomicBool::new(false));
     let busy: Vec<_> = (0..if stress { cores } else { 0 })
-        .map(|_| Command::new("yes").stdout(Stdio::null()).spawn().unwrap())
+        .map(|_| {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                while !done.load(SeqCst) {
+                    std::hint::spin_loop();
+                }
+            })
+        })
         .collect();
     let sink = Arc::new(Arrivals::default());
     let began = Instant::now();
@@ -241,9 +250,9 @@ pub fn latency(
     let length = Duration::from_secs_f64(samples.len() as f64 / rate);
     std::thread::sleep(length + Duration::from_secs(3));
     session.stop();
-    for mut b in busy {
-        let _ = b.kill();
-        let _ = b.wait();
+    done.store(true, SeqCst);
+    for b in busy {
+        b.join().unwrap();
     }
     let arrivals = sink.0.lock().unwrap();
     let after_speech = |translated: bool| {

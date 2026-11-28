@@ -1,18 +1,29 @@
-//! Real recognition. Downloads the 60 MB base model once.
-#![cfg(target_os = "macos")]
+//! Real recognition. Downloads the 60 MB base model once. Speech comes from macOS `say`, so the
+//! tests that need it run on macOS only.
 
 use openlang_contract as contract;
 use openlang_core::{ports::*, registry::Registry};
 
-#[test]
-fn recognizes_speech_and_detects_the_language() {
+fn registry() -> Registry {
     let mut registry = Registry::default();
     openlang_provider_whisper::register(
         &mut registry,
         std::env::temp_dir().join("openlang-test-models"),
     );
+    registry
+}
+
+#[test]
+fn stops_without_audio() {
+    let registry = registry();
+    contract::stops_without_audio(registry.stt("whisper").unwrap().as_ref(), &Job::default());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn recognizes_speech_and_detects_the_language() {
+    let registry = registry();
     let stt = registry.stt("whisper").unwrap().as_ref();
-    contract::stops_without_audio(stt, &Job::default());
     for (voice, text, expect, language) in [
         (
             "Samantha",
@@ -35,16 +46,23 @@ fn recognizes_speech_and_detects_the_language() {
     }
 }
 
-#[test]
-fn detector_names_the_language_and_ignores_silence() {
-    let models = std::env::temp_dir().join("openlang-test-models");
-    let mut registry = Registry::default();
-    openlang_provider_whisper::register(&mut registry, models);
-    let detector = registry.detector.unwrap();
+fn detector() -> Box<dyn DetectorSession> {
+    let detector = registry().detector.unwrap();
     detector.prepare(&Job::default(), &|_| {}).unwrap();
-    let allowed = ["en", "id", "ja"].map(String::from).to_vec();
-    let mut session = detector.open(allowed).unwrap();
-    assert_eq!(session.detect(&vec![0.0; 48_000]).unwrap(), None);
+    detector
+        .open(["en", "id", "ja"].map(String::from).to_vec())
+        .unwrap()
+}
+
+#[test]
+fn detector_ignores_silence() {
+    assert_eq!(detector().detect(&vec![0.0; 48_000]).unwrap(), None);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn detector_names_the_language() {
+    let mut session = detector();
     for (voice, text, language) in [
         (
             "Samantha",
