@@ -59,7 +59,7 @@ impl Default for SubtitleStyle {
     fn default() -> Self {
         Self {
             show: SubtitleShow::Both,
-            text_size: 14,
+            text_size: 11,
             font: None,
             color: "#ffffff".into(),
         }
@@ -67,6 +67,15 @@ impl Default for SubtitleStyle {
 }
 
 impl SubtitleStyle {
+    /// Both lines now share one size: the one the smaller original line had.
+    fn original_size(self) -> Self {
+        Self {
+            text_size: (f64::from(self.text_size) * 0.8).round() as u32,
+            ..self
+        }
+        .fit()
+    }
+
     /// Keeps hand-edited values from breaking the caption CSS.
     fn fit(self) -> Self {
         let is_hex = |c: &str| {
@@ -238,7 +247,8 @@ pub fn secret_key(provider: &str, field: &str) -> String {
 
 /// The file format `save` writes. Files from before versioning are format 1.
 /// 2: on Windows a custom place is in desktop pixels, no longer in points (`placement`).
-const SCHEMA: u32 = 2;
+/// 3: the original line is as big as the translation; it was drawn at 0.8 of `text_size`.
+const SCHEMA: u32 = 3;
 
 /// What goes to disk: the settings plus the format they are in.
 #[derive(Serialize)]
@@ -258,12 +268,14 @@ fn parse(bytes: &[u8]) -> std::result::Result<Settings, String> {
     if version > u64::from(SCHEMA) {
         return Err(format!("written by a newer OpenLang (format {version})"));
     }
-    let settings: Settings = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    Ok(if version < 2 && cfg!(windows) {
-        settings.without_point_places()
-    } else {
-        settings
-    })
+    let mut settings: Settings = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if version < 2 && cfg!(windows) {
+        settings = settings.without_point_places();
+    }
+    if version < 3 {
+        settings.subtitle = settings.subtitle.original_size();
+    }
+    Ok(settings)
 }
 
 pub struct SettingsFile(pub PathBuf);
@@ -372,7 +384,7 @@ mod tests {
         let written = fs::read_to_string(&path).unwrap();
         let loaded = file.load(&registry);
         fs::remove_file(path).unwrap();
-        assert!(written.contains(r#""version": 2"#));
+        assert!(written.contains(r#""version": 3"#));
         assert_eq!(loaded.target_language, "ja");
         assert!(!loaded.stt.contains(&"gone".into()));
     }
@@ -381,6 +393,16 @@ mod tests {
     fn files_from_before_versioning_still_load() {
         let s = parse(br#"{"target_language":"ja"}"#).unwrap();
         assert_eq!(s.target_language, "ja");
+    }
+
+    #[test]
+    fn text_size_becomes_the_size_the_original_had() {
+        let s = parse(br#"{"version":2,"subtitle":{"text_size":20}}"#).unwrap();
+        assert_eq!(s.subtitle.text_size, 16);
+        let s = parse(br#"{"version":2,"subtitle":{"text_size":12}}"#).unwrap();
+        assert_eq!(s.subtitle.text_size, 11);
+        let s = parse(br#"{"version":3,"subtitle":{"text_size":20}}"#).unwrap();
+        assert_eq!(s.subtitle.text_size, 20);
     }
 
     #[test]

@@ -219,6 +219,14 @@ pub fn drag_end(app: &AppHandle) -> Option<(Floating, Place)> {
     Some((which, Place::dropped(r, &monitors(app))?))
 }
 
+/// Fixes the caption's height; its width stays free to resize.
+pub fn fit_caption(app: &AppHandle, height: f64) {
+    if let Some(w) = Floating::Caption.window(app) {
+        let _ = w.set_min_size(Some(LogicalSize::new(240.0, height)));
+        let _ = w.set_max_size(Some(LogicalSize::new(f64::from(u16::MAX), height)));
+    }
+}
+
 /// The caption window's size after the user resized it.
 pub fn caption_size(app: &AppHandle) -> Option<(f64, f64)> {
     let w = Floating::Caption.window(app)?;
