@@ -14,8 +14,8 @@ Butuh Rust, Node (hanya untuk CLI build), `make`, dan `cmake` (hanya untuk Whisp
   atau Debian 13). Kunci API disimpan di Secret Service: GNOME Keyring atau KWallet.
 - Windows (x64 atau ARM): Vulkan SDK, `make`, dan `app/vulkan-1.dll` yang dibangun dari Khronos
   Vulkan-Loader (lihat `.github/workflows/ci.yml`). Jalankan `make` dari Git Bash. Di ARM,
-  whisper.cpp dibangun dengan clang-cl (`CMAKE_GENERATOR_TOOLSET=ClangCL`). Prosesor x86_64 perlu
-  AVX2.
+  whisper.cpp dibangun dengan clang-cl di dalam lingkungan MSVC arm64: `CMAKE_GENERATOR=Ninja
+  CMAKE_C_COMPILER=clang-cl CMAKE_CXX_COMPILER=clang-cl`. Prosesor x86_64 perlu AVX2.
 
 ```sh
 make            # daftar perintah

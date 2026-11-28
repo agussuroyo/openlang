@@ -68,10 +68,20 @@ jobs:
           cp "$RUNNER_TEMP/loader/build/loader/Release/vulkan-1.dll" app/vulkan-1.dll
           echo "$GITHUB_WORKSPACE/app" >> "$GITHUB_PATH"
 
-      # ggml refuses MSVC on ARM; Visual Studio's clang-cl builds it.
+      # ggml refuses MSVC on ARM, so whisper.cpp is built with clang-cl. With Ninja (not the
+      # Visual Studio generator, whose toolset the cmake crate fixes) inside the MSVC
+      # environment for its headers and libraries.
+      - name: MSVC environment
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
       - name: clang-cl for whisper.cpp
         if: runner.os == 'Windows' && runner.arch == 'ARM64'
-        run: echo "CMAKE_GENERATOR_TOOLSET=ClangCL" >> "$GITHUB_ENV"
+        run: |
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER=clang-cl" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang-cl" >> "$GITHUB_ENV"
 
       # whisper.cpp's Vulkan shader build nests deep enough to pass the 260 character path
       # limit of MSBuild's file tracker under the default target directory. The Makefile uses
