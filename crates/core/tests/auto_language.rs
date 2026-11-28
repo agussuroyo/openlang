@@ -324,9 +324,10 @@ fn a_recognizer_that_never_finishes_cannot_hold_up_the_new_language() {
 
 #[test]
 fn a_slow_download_never_holds_up_the_audio() {
+    // Far longer than speaking takes, also on a slow machine, so the download is still running.
     let mut r = run_with(
         vec![("id", 0.9)],
-        Some(Duration::from_millis(500)),
+        Some(Duration::from_secs(2)),
         Duration::from_millis(50),
     );
     r.speak(8);

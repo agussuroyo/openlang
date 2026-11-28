@@ -15,7 +15,7 @@ Butuh Rust, Node (hanya untuk CLI build), `make`, dan `cmake` (hanya untuk Whisp
 - Windows (x64 atau ARM): Vulkan SDK, `make`, dan `app/vulkan-1.dll` yang dibangun dari Khronos
   Vulkan-Loader (lihat `.github/workflows/ci.yml`). Jalankan `make` dari Git Bash. Di ARM,
   whisper.cpp dibangun dengan clang-cl di dalam lingkungan MSVC arm64: `CMAKE_GENERATOR=Ninja
-  CMAKE_C_COMPILER=clang-cl CMAKE_CXX_COMPILER=clang-cl`. Prosesor x86_64 perlu AVX2.
+  CMAKE_C_COMPILER=clang-cl CMAKE_CXX_COMPILER=clang-cl CXXFLAGS_aarch64_pc_windows_msvc=/EHsc`. Prosesor x86_64 perlu AVX2.
 
 ```sh
 make            # daftar perintah

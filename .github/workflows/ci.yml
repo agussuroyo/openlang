@@ -84,6 +84,8 @@ jobs:
           echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
           echo "CMAKE_C_COMPILER=clang-cl" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang-cl" >> "$GITHUB_ENV"
+          # The cmake crate replaces CMake's default flags, which carry C++ exceptions.
+          echo "CXXFLAGS_aarch64_pc_windows_msvc=/EHsc" >> "$GITHUB_ENV"
 
       # whisper.cpp's Vulkan shader build nests deep enough to pass the 260 character path
       # limit of MSBuild's file tracker under the default target directory. The Makefile uses
