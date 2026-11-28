@@ -335,6 +335,7 @@ if (isMac) document.documentElement.dataset.chrome = 'blend';
 addEventListener('hashchange', show);
 show();
 await load();
-await listen('settings', e => { if (data) { data.settings = e.payload; redrawPlaces(); } });
+// Updated in place: controls already drawn keep reading the same object.
+await listen('settings', e => { if (data) { Object.assign(data.settings, e.payload); redrawPlaces(); } });
 // A model may have been downloaded while this window was in the background.
 await listen('status', e => { if (e.payload.state === 'listening') load(); });
