@@ -162,6 +162,20 @@ impl Settings {
         self
     }
 
+    /// A custom place saved in points would land elsewhere read as pixels; the same part of the
+    /// main display is the closest safe spot.
+    fn without_point_places(self) -> Self {
+        let corner = |p: Place| match p {
+            Place::Custom { h, v, .. } => Place::preset(h, v),
+            preset => preset,
+        };
+        Self {
+            caption_place: corner(self.caption_place),
+            island_place: corner(self.island_place),
+            ..self
+        }
+    }
+
     /// True when a running session has to restart to honour the change.
     pub fn pipeline_differs(&self, other: &Self) -> bool {
         let look = |s: &Self| {
@@ -223,7 +237,8 @@ pub fn secret_key(provider: &str, field: &str) -> String {
 }
 
 /// The file format `save` writes. Files from before versioning are format 1.
-const SCHEMA: u32 = 1;
+/// 2: on Windows a custom place is in desktop pixels, no longer in points (`placement`).
+const SCHEMA: u32 = 2;
 
 /// What goes to disk: the settings plus the format they are in.
 #[derive(Serialize)]
@@ -243,7 +258,12 @@ fn parse(bytes: &[u8]) -> std::result::Result<Settings, String> {
     if version > u64::from(SCHEMA) {
         return Err(format!("written by a newer OpenLang (format {version})"));
     }
-    serde_json::from_value(value).map_err(|e| e.to_string())
+    let settings: Settings = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    Ok(if version < 2 && cfg!(windows) {
+        settings.without_point_places()
+    } else {
+        settings
+    })
 }
 
 pub struct SettingsFile(pub PathBuf);
@@ -352,7 +372,7 @@ mod tests {
         let written = fs::read_to_string(&path).unwrap();
         let loaded = file.load(&registry);
         fs::remove_file(path).unwrap();
-        assert!(written.contains(r#""version": 1"#));
+        assert!(written.contains(r#""version": 2"#));
         assert_eq!(loaded.target_language, "ja");
         assert!(!loaded.stt.contains(&"gone".into()));
     }
@@ -361,6 +381,22 @@ mod tests {
     fn files_from_before_versioning_still_load() {
         let s = parse(br#"{"target_language":"ja"}"#).unwrap();
         assert_eq!(s.target_language, "ja");
+    }
+
+    #[test]
+    fn points_places_become_the_same_part_of_the_screen() {
+        let s = Settings {
+            caption_place: Place::Custom {
+                x: 900.0,
+                y: 700.0,
+                h: Edge::Middle,
+                v: Edge::End,
+            },
+            ..Settings::default()
+        }
+        .without_point_places();
+        assert_eq!(s.caption_place, Place::preset(Edge::Middle, Edge::End));
+        assert_eq!(s.island_place, Settings::default().island_place);
     }
 
     #[test]

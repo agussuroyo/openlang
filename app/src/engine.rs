@@ -191,10 +191,17 @@ impl Engine {
 
     pub fn save(&self, new: Settings) -> Result<()> {
         let current = self.settings().hotkey;
-        if current != new.hotkey {
+        let rekey = current != new.hotkey;
+        if rekey {
             hotkey::replace(&self.app, Some(&current), &new.hotkey)?;
         }
-        self.file.save(&new)?;
+        if let Err(e) = self.file.save(&new) {
+            // The shortcut in use must stay the one the settings name.
+            if rekey {
+                let _ = hotkey::replace(&self.app, Some(&new.hotkey), &current);
+            }
+            return Err(e);
+        }
         let old = std::mem::replace(&mut *lock(&self.settings), new.clone());
         let _ = self.app.emit("settings", &new);
         windows::arrange(&self.app, &new);
