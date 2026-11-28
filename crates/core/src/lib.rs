@@ -2,6 +2,7 @@
 
 pub mod auto_language;
 mod clauses;
+pub mod cpu;
 pub mod domain;
 pub mod error;
 pub mod graph;
