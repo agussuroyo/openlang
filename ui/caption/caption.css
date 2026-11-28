@@ -3,12 +3,14 @@ html,body{background:transparent}
 body{padding:6px;display:flex;font-family:var(--sub-font,var(--font))}
 body.dragging .subtitle{cursor:grabbing}
 
-.subtitle{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:.1em;color:var(--sub-color);font-size:var(--sub-size);font-weight:600;line-height:1.3;text-align:center;text-shadow:var(--sub-shadow);cursor:grab;transition:opacity .2s ease}
+.subtitle{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;gap:.35em;color:var(--sub-color);font-size:var(--sub-size);font-weight:600;line-height:1.3;text-shadow:var(--sub-shadow);cursor:grab;transition:opacity .2s ease}
 .subtitle.quiet{opacity:0}
 
-/* At most two lines each; a long sentence keeps its newest words in view. */
-.original,.translation{max-height:2.8em;padding:.1em .3em;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
-.original span,.translation span{unicode-bidi:plaintext}
-.original{font-size:.8em;opacity:.85}
-.original:has(span:empty),.translation:has(span:empty){display:none}
+/* Each line is a fixed slot of two text lines, so nothing moves when the other one wraps or empties.
+   Text starts at the left and grows to the right; subtitles.js slides it up a whole line when it outgrows its slot.
+   In a window too short for both, the original gives up its lines first. */
+.original,.translation{flex:0 1 auto;height:2.6em;min-height:0;padding:0 4px;overflow:hidden}
+.original{flex-shrink:100;font-size:.8em;opacity:.85}
+.original span,.translation span{display:block;unicode-bidi:plaintext;text-align:start;transition:transform .18s var(--ease-out)}
+.original:has(span:empty),.translation:has(span:empty),.cramped{visibility:hidden}
 body[data-show=translation] .original,body[data-show=original] .translation{display:none}

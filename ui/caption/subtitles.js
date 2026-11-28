@@ -3,7 +3,29 @@ const QUIET_AFTER = 6000;       // ms with nothing new
 const KEEP = 40;                // originals kept while their translation is on the way
 const WAIT_TRANSLATION = 1500;  // ms a newer original waits for its translation before it is shown alone
 
+// Keeps the newest whole lines of a line's text in view. The text slides up when a line is added and jumps
+// back without sliding when it gets shorter, so a new sentence never comes down from above.
+function newestLines(span) {
+  const slot = span.parentElement;
+  let shift = 0;
+  const fit = () => {
+    const line = parseFloat(getComputedStyle(span).lineHeight);
+    const lines = Math.floor(slot.getBoundingClientRect().height / line + 0.05);
+    slot.classList.toggle('cramped', lines < 1);
+    const next = Math.max(0, span.offsetHeight - Math.max(1, lines) * line);
+    if (next === shift) return;
+    span.style.transition = next > shift ? '' : 'none';
+    span.style.transform = next ? `translateY(${-next}px)` : '';
+    shift = next;
+  };
+  const watch = new ResizeObserver(fit);
+  watch.observe(span);
+  watch.observe(slot);
+}
+
 export function subtitles({ original, translation, onQuiet }) {
+  newestLines(original);
+  newestLines(translation);
   const originals = new Map();  // segment id -> original text
   // Segment ids are random, so their order is the order they were first seen. Two sources (system audio
   // and microphone) interleave, and a late result of an older segment must not pull the caption back.
