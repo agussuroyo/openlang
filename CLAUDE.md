@@ -29,7 +29,7 @@ Windows and Linux build what CI builds (`.github/workflows/ci.yml`): Linux needs
 
 Test notes:
 - Provider tests speak real audio with macOS `say`. They are macOS-only. Bergamot's test needs no audio and runs everywhere; it downloads about 120 MB of models once.
-- `provider-whisper/tests/realtime.rs` plays speech in real time through Whisper and Bergamot, idle and with every core busy, and fails when translation adds 600 ms or partials lag.
+- `provider-whisper/tests/realtime.rs` plays speech in real time through Whisper and Bergamot, idle and with every core busy, and fails when translation adds 600 ms or partials lag. It skips itself on CI, whose virtual machines run Whisper about seven times slower than a real Mac.
 - `FXTRANSLATE_REQUIRE_SIMD=1` (set in CI) fails a build that would fall back to the slow scalar translation kernel.
 - The Whisper test downloads a 60 MB model to a temp dir once. It needs `cmake` and network.
 - `provider-apple/tests/on_device.rs` uses `harness = false` with its own `main`. Apple Translation only makes progress while a main run loop is alive, so it runs `CFRunLoopRun` on the main thread.

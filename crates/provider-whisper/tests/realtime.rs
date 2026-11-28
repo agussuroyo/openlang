@@ -7,6 +7,12 @@ use openlang_core::{ports::*, registry::Registry};
 
 #[test]
 fn whisper_and_bergamot_keep_up_with_speech() {
+    // CI runners are virtual machines without a usable GPU; Whisper there runs about seven times
+    // slower than on a real Mac, so they cannot say whether captions keep up.
+    if std::env::var_os("CI").is_some() {
+        println!("skipped on CI: needs a real machine");
+        return;
+    }
     let models = std::env::temp_dir().join("openlang-test-models");
     let mut registry = Registry::default();
     openlang_provider_whisper::register(&mut registry, models.clone());

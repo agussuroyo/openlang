@@ -52,6 +52,13 @@ jobs:
           cp "$RUNNER_TEMP/loader/build/loader/Release/vulkan-1.dll" app/vulkan-1.dll
           echo "$GITHUB_WORKSPACE/app" >> "$GITHUB_PATH"
 
+      # whisper.cpp's Vulkan shader build nests deep enough to pass the 260 character path
+      # limit of MSBuild's file tracker under the default target directory.
+      - name: Short target directory
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --all --check
@@ -79,8 +86,8 @@ jobs:
         with:
           name: OpenLang-${{ matrix.os }}
           path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/nsis/*.exe
-            target/release/bundle/deb/*.deb
-            target/release/bundle/appimage/*.AppImage
+            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/dmg/*.dmg
+            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/nsis/*.exe
+            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/deb/*.deb
+            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/appimage/*.AppImage
           if-no-files-found: error
