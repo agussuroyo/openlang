@@ -1,0 +1,79 @@
+name: Setup
+description: Rust, system libraries, Vulkan and the Rust cache, the same for every job.
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - name: Linux libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev \
+          libayatana-appindicator3-dev librsvg2-dev libclang-dev pkg-config cmake \
+          libvulkan-dev glslc
+
+    - name: make
+      if: runner.os == 'Windows'
+      shell: bash
+      run: choco install make -y --no-progress
+
+    # Whisper uses the graphics card through Vulkan.
+    - name: Vulkan SDK
+      if: runner.os == 'Windows'
+      uses: jakoch/install-vulkan-sdk-action@v1.8.1
+      with:
+        vulkan_version: 1.4.341.0
+        cache: true
+
+    # Shipped next to the app, so it starts on a PC without a Vulkan driver and falls back to
+    # the CPU. The tests run against it too, without any driver installed.
+    - name: Vulkan loader
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        git clone --depth 1 --branch vulkan-sdk-1.4.341.0 https://github.com/KhronosGroup/Vulkan-Loader.git "$RUNNER_TEMP/loader"
+        cmake -S "$RUNNER_TEMP/loader" -B "$RUNNER_TEMP/loader/build" -D UPDATE_DEPS=ON -D BUILD_TESTS=OFF
+        cmake --build "$RUNNER_TEMP/loader/build" --config Release
+        cp "$RUNNER_TEMP/loader/build/loader/Release/vulkan-1.dll" app/vulkan-1.dll
+        echo "$GITHUB_WORKSPACE/app" >> "$GITHUB_PATH"
+
+    # ggml refuses MSVC on ARM, so whisper.cpp is built with clang-cl. With Ninja (not the
+    # Visual Studio generator, whose toolset the cmake crate fixes) inside the MSVC
+    # environment for its headers and libraries.
+    - name: MSVC environment
+      if: runner.os == 'Windows' && runner.arch == 'ARM64'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: arm64
+    - name: clang-cl for whisper.cpp
+      if: runner.os == 'Windows' && runner.arch == 'ARM64'
+      shell: bash
+      run: |
+        # Git Bash's coreutils link would shadow MSVC's linker on PATH.
+        rm -f /usr/bin/link.exe
+        echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+        echo "CMAKE_C_COMPILER=clang-cl" >> "$GITHUB_ENV"
+        echo "CMAKE_CXX_COMPILER=clang-cl" >> "$GITHUB_ENV"
+        # The cmake crate replaces CMake's default flags, which carry C++ exceptions. Dash, not
+        # slash: Git Bash would turn /EHsc into a path.
+        echo "CXXFLAGS_aarch64_pc_windows_msvc=-EHsc" >> "$GITHUB_ENV"
+
+    # whisper.cpp's Vulkan shader build nests deep enough to pass the 260 character path
+    # limit of MSBuild's file tracker under the default target directory. The Makefile uses
+    # the same directory; it is set here too so the cache and the upload find it.
+    - name: Short target directory
+      if: runner.os == 'Windows'
+      shell: bash
+      run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
+
+    # One cache per job: checks build debug, bundles build release. Saved also when a job
+    # fails, so the next push after a red run starts warm.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ". -> ${{ env.CARGO_TARGET_DIR || 'target' }}"
+        cache-on-failure: true
