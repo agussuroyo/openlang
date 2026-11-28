@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use cpal::{
-    BufferSize, Device, ErrorKind, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
-    SupportedStreamConfig,
+    BufferSize, Device, ErrorKind, FromSample, I24, SampleFormat, SizedSample, Stream,
+    StreamConfig, SupportedStreamConfig, U24,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use openlang_core::{
@@ -101,12 +101,10 @@ impl Kind {
     }
 
     fn failed(self, e: cpal::Error) -> Error {
-        match (e.kind(), self) {
-            (ErrorKind::PermissionDenied, Kind::Microphone) => {
-                Error::Permission("microphone".into())
-            }
+        match (denied(&e), self) {
+            (true, Kind::Microphone) => Error::Permission("microphone".into()),
             #[cfg(any(windows, target_os = "linux"))]
-            (ErrorKind::PermissionDenied, Kind::System) => Error::Permission("system audio".into()),
+            (true, Kind::System) => Error::Permission("system audio".into()),
             _ => Error::Device(e.to_string()),
         }
     }
@@ -119,6 +117,16 @@ impl Kind {
             BufferSize::Default
         }
     }
+}
+
+/// WASAPI never reports `PermissionDenied`: a microphone blocked in the Windows privacy settings
+/// fails with `E_ACCESSDENIED`, which cpal keeps only as the `io::Error` text ending its message.
+fn denied(e: &cpal::Error) -> bool {
+    const E_ACCESSDENIED: i32 = 0x8007_0005_u32 as i32;
+    e.kind() == ErrorKind::PermissionDenied
+        || cfg!(windows)
+            && e.to_string()
+                .ends_with(&format!("(os error {E_ACCESSDENIED})"))
 }
 
 struct Running {
@@ -262,6 +270,13 @@ fn keep_delivering(kind: Kind, device: &Device) -> Result<Option<Stream>> {
     Ok(Some(stream))
 }
 
+fn to_f32<T>(sample: T) -> f32
+where
+    f32: FromSample<T>,
+{
+    f32::from_sample_(sample)
+}
+
 fn build<T>(
     kind: Kind,
     device: &Device,
@@ -277,7 +292,7 @@ where
         .build_input_stream(
             config,
             move |data: &[T], _: &_| {
-                writer.write_iter(data.iter().map(|s| f32::from_sample_(*s)));
+                writer.write_iter(data.iter().map(|s| to_f32(*s)));
             },
             move |e: cpal::Error| match e.kind() {
                 ErrorKind::DeviceChanged | ErrorKind::Xrun | ErrorKind::RealtimeDenied => {}
@@ -286,6 +301,30 @@ where
             None,
         )
         .map_err(|e| kind.failed(e))
+}
+
+/// Every PCM format the PulseAudio, ALSA and WASAPI hosts deliver.
+fn build_any(
+    kind: Kind,
+    device: &Device,
+    format: SampleFormat,
+    config: StreamConfig,
+    writer: AudioWriter,
+) -> Result<Stream> {
+    match format {
+        SampleFormat::I8 => build::<i8>(kind, device, config, writer),
+        SampleFormat::U8 => build::<u8>(kind, device, config, writer),
+        SampleFormat::I16 => build::<i16>(kind, device, config, writer),
+        SampleFormat::U16 => build::<u16>(kind, device, config, writer),
+        SampleFormat::I24 => build::<I24>(kind, device, config, writer),
+        SampleFormat::U24 => build::<U24>(kind, device, config, writer),
+        SampleFormat::I32 => build::<i32>(kind, device, config, writer),
+        SampleFormat::U32 => build::<u32>(kind, device, config, writer),
+        SampleFormat::I64 => build::<i64>(kind, device, config, writer),
+        SampleFormat::F32 => build::<f32>(kind, device, config, writer),
+        SampleFormat::F64 => build::<f64>(kind, device, config, writer),
+        other => Err(Error::Device(format!("unsupported sample format {other}"))),
+    }
 }
 
 impl AudioSource for Cpal {
@@ -311,11 +350,6 @@ impl AudioSource for Cpal {
             sample_rate: supported.sample_rate(),
             channels: supported.channels(),
         };
-        let (writer, reader) = realtime::channel(format, 4);
-        #[cfg(target_os = "macos")]
-        let watch = follow::Watch::new(writer.invalidator())?;
-        #[cfg(not(target_os = "macos"))]
-        let watch = follow::Watch::new(self.kind, first, writer.invalidator())?;
         #[cfg(windows)]
         let silence = match self.kind {
             Kind::System => keep_delivering(self.kind, &device)?,
@@ -324,17 +358,28 @@ impl AudioSource for Cpal {
         #[cfg(not(windows))]
         let silence = None;
         let sample_format = supported.sample_format();
-        let config = StreamConfig {
-            buffer_size: self.kind.buffer(format.sample_rate),
-            ..supported.into()
+        let config: StreamConfig = supported.into();
+        // The stream owns its writer, so a retry needs a new channel.
+        let start = |buffer_size| {
+            let (writer, reader) = realtime::channel(format, 4);
+            let invalidator = writer.invalidator();
+            let config = StreamConfig {
+                buffer_size,
+                ..config
+            };
+            build_any(self.kind, &device, sample_format, config, writer)
+                .map(|stream| (stream, reader, invalidator))
         };
-        let stream = match sample_format {
-            SampleFormat::F32 => build::<f32>(self.kind, &device, config, writer),
-            SampleFormat::I16 => build::<i16>(self.kind, &device, config, writer),
-            SampleFormat::I32 => build::<i32>(self.kind, &device, config, writer),
-            SampleFormat::U16 => build::<u16>(self.kind, &device, config, writer),
-            other => Err(Error::Device(format!("unsupported sample format {other}"))),
+        let buffer = self.kind.buffer(format.sample_rate);
+        let (stream, reader, invalidator) = match start(buffer) {
+            // ALSA refuses a fixed size outside the device's period range.
+            Err(_) if buffer != BufferSize::Default => start(BufferSize::Default),
+            started => started,
         }?;
+        #[cfg(target_os = "macos")]
+        let watch = follow::Watch::new(invalidator)?;
+        #[cfg(not(target_os = "macos"))]
+        let watch = follow::Watch::new(self.kind, first, invalidator)?;
         stream.play().map_err(|e| self.kind.failed(e))?;
         Ok((
             reader,
@@ -344,5 +389,58 @@ impl AudioSource for Cpal {
                 _silence: silence,
             }),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cpal::Sample;
+
+    use super::*;
+
+    /// Lowest maps to -1, the format's silence to 0, highest to just under or exactly 1.
+    fn maps<T: Sample>(min: T, max: T)
+    where
+        f32: FromSample<T>,
+    {
+        assert_eq!(to_f32(min), -1.0);
+        assert_eq!(to_f32(T::EQUILIBRIUM), 0.0);
+        let top = to_f32(max);
+        assert!((0.99..=1.0).contains(&top), "max maps to {top}");
+    }
+
+    #[test]
+    fn every_format_maps_to_unit_range() {
+        maps(i8::MIN, i8::MAX);
+        maps(u8::MIN, u8::MAX);
+        maps(i16::MIN, i16::MAX);
+        maps(u16::MIN, u16::MAX);
+        let i24 = |v| I24::new(v).unwrap();
+        maps(i24(-(1 << 23)), i24((1 << 23) - 1));
+        let u24 = |v| U24::new(v).unwrap();
+        maps(u24(0), u24((1 << 24) - 1));
+        maps(i32::MIN, i32::MAX);
+        maps(u32::MIN, u32::MAX);
+        maps(i64::MIN, i64::MAX);
+        maps(-1.0_f32, 1.0_f32);
+        maps(-1.0_f64, 1.0_f64);
+    }
+
+    #[test]
+    fn permission_denied_is_a_permission_error() {
+        let e = cpal::Error::from(ErrorKind::PermissionDenied);
+        assert!(matches!(Kind::Microphone.failed(e), Error::Permission(_)));
+    }
+
+    #[test]
+    fn access_denied_counts_only_on_windows() {
+        // What cpal's WASAPI host reports for E_ACCESSDENIED while opening the microphone.
+        let e = cpal::Error::with_message(
+            ErrorKind::BackendError,
+            "Failed to get audio client: Access is denied. (os error -2147024891)",
+        );
+        assert_eq!(denied(&e), cfg!(windows));
+        let other = cpal::Error::with_message(ErrorKind::BackendError, "(os error 5)");
+        assert!(!denied(&other));
     }
 }

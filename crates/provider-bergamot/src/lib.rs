@@ -284,7 +284,7 @@ impl Provider for Bergamot {
         }
     }
     fn readiness(&self, job: &Job) -> Readiness {
-        if let Err(e) = cpu::check() {
+        if let Err(e) = cpu::check(cpu::Baseline::Gemmology) {
             return unsupported(e.to_string());
         }
         match needed(job) {
@@ -306,7 +306,7 @@ impl Provider for Bergamot {
         }
     }
     fn prepare(&self, job: &Job, progress: &dyn Fn(f32)) -> Result<()> {
-        cpu::check()?;
+        cpu::check(cpu::Baseline::Gemmology)?;
         let route = needed(job)?;
         let total = route.iter().map(|d| d.bytes()).sum::<u64>().max(1) as f32;
         let mut done = 0.0;
@@ -321,7 +321,7 @@ impl Provider for Bergamot {
 
 impl Translator for Bergamot {
     fn open(&self, job: &Job) -> Result<Box<dyn TranslatorSession>> {
-        cpu::check()?;
+        cpu::check(cpu::Baseline::Gemmology)?;
         let mut session = Session {
             shared: self.shared.clone(),
             target: job.target.clone(),

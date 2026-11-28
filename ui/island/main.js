@@ -1,4 +1,4 @@
-import { invoke, listen, short, explain, isMac } from '../shared/app.js';
+import { invoke, listen, short, explain, isMac, platform } from '../shared/app.js';
 import { draggable } from '../shared/drag.js';
 import { createIsland } from './island.js';
 import { soundBars } from './bars.js';
@@ -46,11 +46,11 @@ function fail(error) {
   $('errTitle').textContent = e.title;
   $('errDetail').textContent = e.detail;
   $('errDetail').title = e.detail;
-  const mic = /microphone/i.test(e.detail);
-  act.textContent = e.code === 'permission' ? 'Allow' : 'Settings';
-  act.onclick = () => e.code === 'permission'
-    ? invoke('open_privacy', { pane: mic ? 'microphone' : 'system_audio' })
-    : invoke('show_settings');
+  // The system's privacy page when it has one for this capture, otherwise Settings.
+  const pane = /microphone/i.test(e.detail) ? 'microphone' : 'system_audio';
+  const allow = e.code === 'permission' && platform.privacy.includes(pane);
+  act.textContent = allow ? 'Allow' : 'Settings';
+  act.onclick = () => (allow ? invoke('open_privacy', { pane }) : invoke('show_settings')).catch(() => {});
   problem = true;
   island.go('error');
   visibility();
@@ -85,11 +85,13 @@ function applyStatus(next) {
   visibility();
 }
 
+// Silence on macOS is usually a missing permission; elsewhere nothing asks, so it is the device.
+const silentNote = isMac ? 'No sound yet. Check permission.' : 'No sound yet. Check the output device.';
 function onEvent({ type, data }) {
   if (type === 'level') {
     if (settings.sound_bars) bars.set(data.origin, data.level);
   } else if (type === 'silent') {
-    $('note').textContent = data.silent ? 'No sound yet. Check permission.' : 'Listening';
+    $('note').textContent = data.silent ? silentNote : 'Listening';
   } else if (type === 'failed' && data.error?.code === 'model_missing' && status.state === 'listening') {
     // A newly heard language fetches its model while captions go on. Each sentence reports it
     // again until the model is there, so a quiet while means it arrived.

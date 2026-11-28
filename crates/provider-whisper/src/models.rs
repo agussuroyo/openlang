@@ -47,7 +47,7 @@ impl Model {
 
     /// A file only gets its final name after its checksum matched.
     pub fn readiness(&self, directory: &Path) -> Readiness {
-        if let Err(e) = cpu::check() {
+        if let Err(e) = cpu::check(cpu::Baseline::Ggml) {
             return unsupported(e.to_string());
         }
         if self.path(directory).is_file() {

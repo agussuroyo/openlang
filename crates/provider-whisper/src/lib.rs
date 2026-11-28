@@ -23,7 +23,7 @@ pub fn register(registry: &mut Registry, models: PathBuf) {
         descriptor: Descriptor {
             id: "whisper",
             name: "Whisper",
-            summary: "On this computer, free, detects the language. Heavier than Apple.",
+            summary: "On this computer, free, detects the language.",
             fields: vec![Field {
                 key: "model",
                 label: "Model",
@@ -87,7 +87,7 @@ fn failed(e: whisper_rs::WhisperError) -> Error {
 }
 
 fn load(model: &Path) -> Result<WhisperState> {
-    openlang_core::cpu::check()?;
+    openlang_core::cpu::check(openlang_core::cpu::Baseline::Ggml)?;
     let mut params = WhisperContextParameters::default();
     params.flash_attn(true);
     WhisperContext::new_with_params(model, params)

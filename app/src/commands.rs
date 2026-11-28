@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::{
     engine::{Engine, Status},
+    hotkey,
     placement::{Edge, Place},
     settings::{Settings, secret_key},
     windows::{self, Floating},
@@ -35,6 +36,8 @@ pub struct ProviderInfo {
 #[derive(Serialize)]
 pub struct Snapshot {
     settings: Settings,
+    /// False when another app owns the shortcut.
+    hotkey_works: bool,
     sources: Vec<SourceInfo>,
     stt: Vec<ProviderInfo>,
     translators: Vec<ProviderInfo>,
@@ -55,9 +58,12 @@ fn info(
     s: &Settings,
     p: &dyn Provider,
     detector: Option<&dyn Provider>,
-) -> Result<ProviderInfo> {
+) -> ProviderInfo {
     let d = p.descriptor().clone();
-    let options = s.options_for(&d, e.secrets.as_ref())?;
+    // Without a system keychain (Linux with no Secret Service) Settings still opens.
+    let options = s
+        .options_for(&d, e.secrets.as_ref())
+        .unwrap_or_else(|_| s.options.get(d.id).cloned().unwrap_or_default());
     let stored_secrets = d
         .fields
         .iter()
@@ -72,21 +78,22 @@ fn info(
     };
     let mut languages = p.languages();
     languages.can_detect |= detector.is_some();
-    Ok(ProviderInfo {
+    ProviderInfo {
         location,
         languages,
         readiness: to_prepare(p, detector, &job).readiness(&job),
         stored_secrets,
         descriptor: d,
-    })
+    }
 }
 
 #[tauri::command]
-pub async fn snapshot(engine: State<'_, Shared>) -> Result<Snapshot> {
+pub async fn snapshot(app: AppHandle, engine: State<'_, Shared>) -> Result<Snapshot> {
     let e = engine.inner().clone();
     background(move || {
         let s = e.settings();
         Ok(Snapshot {
+            hotkey_works: hotkey::works(&app, &s.hotkey),
             sources: e
                 .registry
                 .sources
@@ -100,13 +107,13 @@ pub async fn snapshot(engine: State<'_, Shared>) -> Result<Snapshot> {
                 .stt
                 .iter()
                 .map(|p| info(&e, &s, p.as_ref(), e.detector()))
-                .collect::<Result<_>>()?,
+                .collect(),
             translators: e
                 .registry
                 .translators
                 .iter()
                 .map(|p| info(&e, &s, p.as_ref(), None))
-                .collect::<Result<_>>()?,
+                .collect(),
             settings: s,
         })
     })
@@ -215,47 +222,61 @@ pub fn preview(app: AppHandle, on: bool) {
     windows::preview(&app, on);
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrivacyPane {
     SystemAudio,
     Microphone,
 }
 
+/// The system's privacy settings page for each kind of capture it asks about.
+#[cfg(target_os = "macos")]
+const PRIVACY: &[(PrivacyPane, &str)] = &[
+    (
+        PrivacyPane::SystemAudio,
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture",
+    ),
+    (
+        PrivacyPane::Microphone,
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+    ),
+];
+/// Windows asks only about the microphone; recording the output needs no permission.
+#[cfg(windows)]
+const PRIVACY: &[(PrivacyPane, &str)] =
+    &[(PrivacyPane::Microphone, "ms-settings:privacy-microphone")];
+/// Linux does not ask.
+#[cfg(not(any(target_os = "macos", windows)))]
+const PRIVACY: &[(PrivacyPane, &str)] = &[];
+
+/// What the windows word and offer differently per system.
+#[derive(Serialize)]
+pub struct Platform {
+    os: &'static str,
+    privacy: Vec<PrivacyPane>,
+}
+
+#[tauri::command]
+pub fn platform() -> Platform {
+    Platform {
+        os: std::env::consts::OS,
+        privacy: PRIVACY.iter().map(|(pane, _)| *pane).collect(),
+    }
+}
+
 /// Opens the system's privacy settings for one kind of capture.
 #[tauri::command]
 pub fn open_privacy(pane: PrivacyPane) -> Result<()> {
+    let (_, page) = PRIVACY
+        .iter()
+        .find(|(p, _)| *p == pane)
+        .ok_or_else(|| Error::Config("this system has no privacy page for it".into()))?;
     let program = if cfg!(windows) { "explorer" } else { "open" };
     std::process::Command::new(program)
-        .arg(privacy_page(pane)?)
+        .arg(page)
         .spawn()
         .map(drop)
         .map_err(|e| Error::Config(e.to_string()))
-}
-
-#[cfg(target_os = "macos")]
-fn privacy_page(pane: PrivacyPane) -> Result<&'static str> {
-    Ok(match pane {
-        PrivacyPane::SystemAudio => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture"
-        }
-        PrivacyPane::Microphone => {
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-        }
-    })
-}
-
-/// Windows asks only about the microphone; recording the output needs no permission.
-#[cfg(windows)]
-fn privacy_page(_: PrivacyPane) -> Result<&'static str> {
-    Ok("ms-settings:privacy-microphone")
-}
-
-#[cfg(not(any(target_os = "macos", windows)))]
-fn privacy_page(_: PrivacyPane) -> Result<&'static str> {
-    Err(Error::Config(
-        "this system has no privacy settings for audio".into(),
-    ))
 }
 
 pub fn toggle(app: &AppHandle) {

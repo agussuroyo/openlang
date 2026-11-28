@@ -2,12 +2,17 @@
 
 mod commands;
 mod engine;
+mod hotkey;
 mod modules;
 mod placement;
 mod settings;
 mod windows;
 
-use std::sync::Arc;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use tauri::{
     Manager, WindowEvent,
@@ -16,7 +21,10 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{Builder as Shortcuts, ShortcutState};
 
-const HOTKEY: &str = "Ctrl+Alt+L";
+/// The identifier before `dev.openlang.desktop`; its folders are moved over once.
+const OLD_IDENTIFIER: &str = "dev.openlang.app";
+/// Where the system keychain keeps provider keys. It stays the same, so stored keys survive.
+const KEYCHAIN: &str = "dev.openlang.app";
 
 fn open_settings(app: &tauri::AppHandle) {
     if let Err(e) = windows::show_settings(app) {
@@ -24,10 +32,41 @@ fn open_settings(app: &tauri::AppHandle) {
     }
 }
 
+/// Settings file and models folder. Models are large, so on Windows they stay out of the
+/// roaming profile.
+fn folders(app: &tauri::App) -> tauri::Result<(PathBuf, PathBuf)> {
+    let path = app.path();
+    let settings = path.app_config_dir()?.join("settings.json");
+    let models = path.app_local_data_dir()?.join("models");
+    let old = |dir: PathBuf| dir.with_file_name(OLD_IDENTIFIER);
+    move_once(&old(path.app_data_dir()?).join("models"), &models);
+    move_once(
+        &old(path.app_config_dir()?).join("settings.json"),
+        &settings,
+    );
+    for dir in [path.app_data_dir()?, path.app_config_dir()?] {
+        let _ = fs::remove_dir(old(dir)); // Only when nothing else is left in it.
+    }
+    Ok((settings, models))
+}
+
+fn move_once(from: &Path, to: &Path) {
+    if to.exists() || !from.exists() {
+        return;
+    }
+    let moved = to
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| fs::rename(from, to));
+    if let Err(e) = moved {
+        eprintln!("could not move {} to {}: {e}", from.display(), to.display());
+    }
+}
+
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let file = settings::SettingsFile(app.path().app_config_dir()?.join("settings.json"));
-    let models = app.path().app_data_dir()?.join("models");
-    let secrets = Box::new(settings::Keychain("dev.openlang.app"));
+    let (file, models) = folders(app)?;
+    let file = settings::SettingsFile(file);
+    let secrets = Box::new(settings::Keychain(KEYCHAIN));
     let engine = Arc::new(engine::Engine::new(
         app.handle().clone(),
         modules::registry(&models),
@@ -41,14 +80,26 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     windows::arrange(app.handle(), &settings);
     windows::watch_displays(app.handle());
 
-    let toggle = MenuItem::with_id(app, "toggle", "Start / Stop  ⌃⌥L", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle", "Start / Stop", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit OpenLang", true, None::<&str>)?;
     let line = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&toggle, &open, &line, &quit])?;
-    TrayIconBuilder::with_id("tray")
+    app.manage(hotkey::TrayEntry(toggle));
+    // A taken shortcut leaves everything else working; Settings offers another.
+    if let Err(e) = hotkey::replace(app.handle(), None, &settings.hotkey) {
+        eprintln!("hotkey: {e}");
+    }
+    let tray = TrayIconBuilder::with_id("tray")
         .title("OpenLang")
-        .menu(&menu)
+        .tooltip("OpenLang");
+    // The menu bar shows the title; Windows and Linux trays show only an icon.
+    #[cfg(not(target_os = "macos"))]
+    let tray = match app.default_window_icon() {
+        Some(icon) => tray.icon(icon.clone()),
+        None => tray,
+    };
+    tray.menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "toggle" => commands::toggle(app),
             "settings" => open_settings(app),
@@ -60,19 +111,23 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    let shortcuts = Shortcuts::new().with_handler(|app, _, event| {
-        if event.state() == ShortcutState::Pressed {
-            commands::toggle(app);
-        }
-    });
-    // Another app may already own the hotkey; everything else still works.
-    let shortcuts = match shortcuts.with_shortcut(HOTKEY) {
-        Ok(s) => s.build(),
-        Err(e) => {
-            eprintln!("hotkey {HOTKEY}: {e}");
-            Shortcuts::new().build()
-        }
-    };
+    // On Wayland, windows cannot place themselves or stay on top, and global shortcuts need
+    // X11, so GTK runs through XWayland when it is there and the user has not chosen.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && std::env::var_os("DISPLAY").is_some()
+        && std::env::var_os("GDK_BACKEND").is_none()
+    {
+        // SAFETY: no other thread exists yet.
+        unsafe { std::env::set_var("GDK_BACKEND", "x11") };
+    }
+    let shortcuts = Shortcuts::new()
+        .with_handler(|app, _, event| {
+            if event.state() == ShortcutState::Pressed {
+                commands::toggle(app);
+            }
+        })
+        .build();
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             open_settings(app)
@@ -94,6 +149,7 @@ fn main() {
             commands::set_preset,
             commands::preview,
             commands::open_privacy,
+            commands::platform,
         ])
         .on_window_event(|window, event| match (window.label(), event) {
             ("settings", WindowEvent::CloseRequested { .. }) => {

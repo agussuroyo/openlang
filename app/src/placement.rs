@@ -1,4 +1,6 @@
-//! Where a floating window sits. Pure geometry in logical screen points.
+//! Where a floating window sits. Pure geometry in desktop units: the one coordinate space the
+//! system places windows in. That is points on macOS and Linux, and pixels on Windows, where each
+//! display can have its own scale. Window sizes are given in points.
 
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +68,8 @@ pub enum Place {
 pub struct Monitor {
     pub name: Option<String>,
     pub area: Rect,
+    /// Desktop units per point on this display.
+    pub scale: f64,
 }
 
 impl Place {
@@ -89,8 +93,9 @@ impl Place {
         let main = monitors.first()?;
         let (eh, ev) = self.edges();
         let at = |m: &Monitor| {
+            let (w, h, margin) = (w * m.scale, h * m.scale, MARGIN * m.scale);
             let free = |start: f64, room: f64, size: f64, e: Edge| {
-                start + MARGIN + (room - size - 2.0 * MARGIN) * e.fraction()
+                start + margin + (room - size - 2.0 * margin) * e.fraction()
             };
             Rect {
                 x: free(m.area.x, m.area.w, w, eh),
@@ -103,18 +108,19 @@ impl Place {
             Self::Preset { monitor, .. } => {
                 at(monitors.iter().find(|m| m.name == *monitor).unwrap_or(main))
             }
-            Self::Custom { x, y, .. } => {
-                let rect = Rect {
-                    x: x - w * eh.fraction(),
-                    y: y - h * ev.fraction(),
-                    w,
-                    h,
-                };
-                match monitors.iter().find(|m| m.area.contains(*x, *y)) {
-                    Some(m) => clamp(rect, &m.area),
-                    None => at(main),
+            Self::Custom { x, y, .. } => match monitors.iter().find(|m| m.area.contains(*x, *y)) {
+                Some(m) => {
+                    let (w, h) = (w * m.scale, h * m.scale);
+                    let rect = Rect {
+                        x: x - w * eh.fraction(),
+                        y: y - h * ev.fraction(),
+                        w,
+                        h,
+                    };
+                    clamp(rect, &m.area)
                 }
-            }
+                None => at(main),
+            },
         })
     }
 
@@ -158,14 +164,15 @@ pub fn snap(r: Rect, monitors: &[Monitor]) -> Rect {
     let Some(m) = nearest(r, monitors) else {
         return r;
     };
+    let (margin, near) = (MARGIN * m.scale, SNAP * m.scale);
     let pull = |p: f64, start: f64, room: f64, size: f64| {
         [
-            start + MARGIN,
+            start + margin,
             start + (room - size) / 2.0,
-            start + room - size - MARGIN,
+            start + room - size - margin,
         ]
         .into_iter()
-        .find(|t| (p - t).abs() < SNAP)
+        .find(|t| (p - t).abs() < near)
         .unwrap_or(p)
     };
     Rect {
@@ -204,6 +211,7 @@ mod tests {
                     w: 1500.0,
                     h: 900.0,
                 },
+                scale: 1.0,
             },
             Monitor {
                 name: Some("b".into()),
@@ -213,8 +221,49 @@ mod tests {
                     w: 2500.0,
                     h: 1400.0,
                 },
+                scale: 1.0,
             },
         ]
+    }
+
+    /// Windows: a 100% display and a 150% one to its right, in pixels.
+    fn mixed() -> Vec<Monitor> {
+        vec![
+            Monitor {
+                name: Some("a".into()),
+                area: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 1920.0,
+                    h: 1040.0,
+                },
+                scale: 1.0,
+            },
+            Monitor {
+                name: Some("b".into()),
+                area: Rect {
+                    x: 1920.0,
+                    y: 0.0,
+                    w: 3840.0,
+                    h: 2100.0,
+                },
+                scale: 1.5,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_window_takes_the_scale_of_its_display() {
+        let p = Place::Preset {
+            h: Edge::End,
+            v: Edge::End,
+            monitor: Some("b".into()),
+        };
+        let r = p.resolve((480.0, 120.0), &mixed()).unwrap();
+        assert_eq!((r.w, r.h), (720.0, 180.0));
+        assert_eq!(r.x + r.w, 1920.0 + 3840.0 - MARGIN * 1.5);
+        let dropped = Place::dropped(r, &mixed()).unwrap();
+        assert_eq!(dropped.resolve((480.0, 120.0), &mixed()).unwrap(), r);
     }
 
     #[test]
