@@ -63,8 +63,8 @@ jobs:
         with:
           name: OpenLang-${{ matrix.os }}
           path: |
-            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/dmg/*.dmg
-            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/nsis/*.exe
-            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/deb/*.deb
-            ${{ env.CARGO_TARGET_DIR || 'target' }}/release/bundle/appimage/*.AppImage
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
