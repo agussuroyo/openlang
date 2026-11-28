@@ -37,6 +37,20 @@ Sejak identifier `dev.openlang.desktop`, settings dan model dari `dev.openlang.a
 sekali saat app dibuka; macOS menanyakan izin audio dan mikrofon sekali lagi. Di Windows model
 disimpan di AppData Local, bukan Roaming.
 
+## Membuka pertama kali
+
+Build OpenLang gratis dan tidak ditandatangani (tanpa sertifikat berbayar), jadi sistem bertanya
+sekali saat pertama dibuka:
+
+- macOS: buka `.dmg`, seret OpenLang ke Applications, lalu klik kanan OpenLang > Open > Open.
+  Atau lewat Terminal: `xattr -dr com.apple.quarantine /Applications/OpenLang.app`.
+  Saat Start pertama, izinkan audio sistem dan mikrofon.
+- Windows: jalankan installer `.exe`; di "Windows protected your PC" klik More info > Run anyway.
+- Linux: `sudo apt install ./OpenLang_*.deb`, atau jadikan AppImage bisa dijalankan:
+  `chmod +x OpenLang_*.AppImage`. Tidak ada peringatan.
+
+Setelah itu OpenLang terbuka seperti app biasa.
+
 ## Susunan
 
 | Folder | Isi |
@@ -77,7 +91,8 @@ Windows dan Linux.
 - Di Linux Wayland, app berjalan lewat XWayland (`GDK_BACKEND=x11`) agar jendela bisa diletakkan,
   tetap di atas, dan shortcut global bekerja. Set `GDK_BACKEND` sendiri untuk memilih lain.
 - Windows tidak memindahkan subtitle ke virtual desktop lain.
-- Build tidak ditandatangani: macOS Gatekeeper dan Windows SmartScreen akan memperingatkan.
+- Build tidak ditandatangani: macOS dan Windows bertanya sekali saat pertama dibuka (lihat
+  "Membuka pertama kali").
 - Di Windows dan Linux, Whisper memakai GPU lewat Vulkan; tanpa GPU sekitar 1 detik per kalimat.
 - Loopback Windows dan monitor Linux juga mendengar suara aplikasi ini sendiri (saat ini tidak ada).
 - Apple Speech tidak mendeteksi bahasa; pilih bahasanya, atau pakai Whisper.
