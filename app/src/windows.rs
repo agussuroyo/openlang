@@ -3,8 +3,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use openlang_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
 use crate::{
@@ -54,39 +54,60 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Windows places windows in pixels across displays of different scales; macOS and Linux in
+/// points. See `placement`.
+const IN_PIXELS: bool = cfg!(windows);
+
+/// Desktop units per point for something drawn at `scale`.
+fn units(scale: f64) -> f64 {
+    if IN_PIXELS { scale } else { 1.0 }
+}
+
 fn monitors(app: &AppHandle) -> Vec<Monitor> {
     let main = app
         .primary_monitor()
         .ok()
         .flatten()
         .and_then(|m| m.name().cloned());
-    let mut all: Vec<_> = app
-        .available_monitors()
-        .unwrap_or_default()
-        .iter()
-        .map(|m| {
-            let (area, scale) = (m.work_area(), m.scale_factor());
-            let at = area.position.to_logical::<f64>(scale);
-            let size = area.size.to_logical::<f64>(scale);
-            Monitor {
-                name: m.name().cloned(),
-                area: Rect {
-                    x: at.x,
-                    y: at.y,
-                    w: size.width,
-                    h: size.height,
-                },
+    let mut all: Vec<Monitor> = Vec::new();
+    for m in app.available_monitors().unwrap_or_default() {
+        let (area, scale) = (m.work_area(), m.scale_factor());
+        let per = scale / units(scale);
+        let at = area.position.to_logical::<f64>(per);
+        let size = area.size.to_logical::<f64>(per);
+        let area = Rect {
+            x: at.x,
+            y: at.y,
+            w: size.width,
+            h: size.height,
+        };
+        // Linux names a display by its model, so two of the same kind need telling apart.
+        let name = m.name().cloned().map(|n| {
+            if all.iter().any(|o| o.name.as_ref() == Some(&n)) {
+                format!("{n} at {},{}", area.x, area.y)
+            } else {
+                n
             }
-        })
-        .collect();
-    all.sort_by_key(|m| m.name != main);
+        });
+        all.push(Monitor {
+            name,
+            area,
+            scale: units(scale),
+        });
+    }
+    // The main display first; without one (some Wayland setups), the one at the origin.
+    all.sort_by_key(|m| match &main {
+        Some(_) => m.name != main,
+        None => (m.area.x, m.area.y) != (0.0, 0.0),
+    });
     all
 }
 
 fn rect(w: &WebviewWindow) -> Option<Rect> {
     let scale = w.scale_factor().ok()?;
-    let at = w.outer_position().ok()?.to_logical::<f64>(scale);
-    let size = w.inner_size().ok()?.to_logical::<f64>(scale);
+    let per = scale / units(scale);
+    let at = w.outer_position().ok()?.to_logical::<f64>(per);
+    let size = w.inner_size().ok()?.to_logical::<f64>(per);
     Some(Rect {
         x: at.x,
         y: at.y,
@@ -96,8 +117,23 @@ fn rect(w: &WebviewWindow) -> Option<Rect> {
 }
 
 fn put(w: &WebviewWindow, r: Rect) {
-    let _ = w.set_size(LogicalSize::new(r.w, r.h));
-    let _ = w.set_position(LogicalPosition::new(r.x, r.y));
+    let _ = if IN_PIXELS {
+        w.set_size(PhysicalSize::new(r.w.round() as u32, r.h.round() as u32))
+    } else {
+        w.set_size(LogicalSize::new(r.w, r.h))
+    };
+    move_to(w, r);
+}
+
+fn move_to(w: &WebviewWindow, r: Rect) {
+    let _ = if IN_PIXELS {
+        w.set_position(PhysicalPosition::new(
+            r.x.round() as i32,
+            r.y.round() as i32,
+        ))
+    } else {
+        w.set_position(LogicalPosition::new(r.x, r.y))
+    };
 }
 
 /// Moves both floating windows to where the settings say.
@@ -163,15 +199,17 @@ pub fn drag_move(app: &AppHandle, dx: f64, dy: f64) {
     let Some((which, from)) = *lock(&app.state::<Desk>().drag) else {
         return;
     };
+    let Some(w) = which.window(app) else {
+        return;
+    };
+    // The page measures the drag in points.
+    let per = units(w.scale_factor().unwrap_or(1.0));
     let moved = Rect {
-        x: from.x + dx,
-        y: from.y + dy,
+        x: from.x + dx * per,
+        y: from.y + dy * per,
         ..from
     };
-    if let Some(w) = which.window(app) {
-        let r = placement::snap(moved, &monitors(app));
-        let _ = w.set_position(LogicalPosition::new(r.x, r.y));
-    }
+    move_to(&w, placement::snap(moved, &monitors(app)));
 }
 
 /// Ends a drag and returns the new place to remember.
@@ -183,11 +221,12 @@ pub fn drag_end(app: &AppHandle) -> Option<(Floating, Place)> {
 
 /// The caption window's size after the user resized it.
 pub fn caption_size(app: &AppHandle) -> Option<(f64, f64)> {
-    Floating::Caption
-        .window(app)
-        .as_ref()
-        .and_then(rect)
-        .map(|r| (r.w, r.h))
+    let w = Floating::Caption.window(app)?;
+    let size = w
+        .inner_size()
+        .ok()?
+        .to_logical::<f64>(w.scale_factor().ok()?);
+    Some((size.width, size.height))
 }
 
 /// A preset applies to the display the window is on now.
