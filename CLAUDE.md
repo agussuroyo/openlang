@@ -15,7 +15,10 @@ make build                                               # bundles in target/rel
 make run / make install                                  # open the build / install it on this computer
 cargo test -p openlang-core --test session a_stuck       # one test by name filter
 cargo test -p openlang-provider-apple -- --nocapture     # real Apple speech/translation
+make conventions                                         # branch name and commit subjects; TITLE=... a PR title
 ```
+
+Git: Conventional Commits, `type/kebab-name` branches, squash-merged pull requests (`CONTRIBUTING.md`). CI checks them in `.github/workflows/conventions.yml`.
 
 On macOS, `rustup` and `cmake` come from Homebrew and are not on PATH by default; the Makefile adds them. For direct `cargo` calls: `export PATH=/opt/homebrew/opt/rustup/bin:$PATH`.
 

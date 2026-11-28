@@ -37,7 +37,7 @@ else
   INSTALL := sudo apt install -y "$$(realpath $(call newest,deb/*.deb))" && (openlang &)
 endif
 
-.PHONY: help build open run install check test
+.PHONY: help build open run install check test conventions
 
 help:
 	@echo "make build          build OpenLang ($(BUNDLES) in $(BUNDLE))"
@@ -47,6 +47,8 @@ help:
 	@echo "make check          format check, lint, UI syntax"
 	@echo "make test           all tests (speaks real audio on macOS, needs network once)"
 	@echo "                    ARGS=... passes more arguments to cargo test"
+	@echo "make conventions    branch name and commit subjects since BASE (CONTRIBUTING.md)"
+	@echo "                    TITLE=... also checks a pull request title"
 
 build:
 	cd app && $(TOOLS) npx --yes @tauri-apps/cli@2 build $(if $(TRIPLE),--target $(TRIPLE))
@@ -67,3 +69,19 @@ check:
 
 test:
 	$(TOOLS) cargo test --workspace $(ARGS)
+
+# CONTRIBUTING.md describes these rules. TITLE and BRANCH reach the shell through the
+# environment, so quotes in a pull request title cannot break the command.
+TYPES := feat|fix|perf|refactor|docs|test|build|ci|chore|revert
+BASE ?= origin/main
+export TITLE BRANCH
+
+conventions:
+	@branch="$${BRANCH:-$$(git rev-parse --abbrev-ref HEAD)}"; bad=0; \
+	if [ "$$branch" != main ] && ! printf '%s\n' "$$branch" | grep -Eq '^($(TYPES))/[a-z0-9]+(-[a-z0-9]+)*$$'; then \
+	  echo "branch, want type/kebab-name: $$branch"; bad=1; fi; \
+	wrong=$$( { git log --no-merges --format=%s $(BASE)..HEAD; printf '%s\n' "$$TITLE"; } \
+	  | awk -v re='^($(TYPES))([(][a-z0-9-]+[)])?!?: [a-z0-9](.*[^.])?$$' 'NF && (!($$0 ~ re) || length > 72)'); \
+	if [ -n "$$wrong" ]; then echo "subject, want type(scope): summary, 72 characters at most:"; \
+	  printf '%s\n' "$$wrong" | sed 's/^/  /'; bad=1; fi; \
+	exit $$bad
