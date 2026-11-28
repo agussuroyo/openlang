@@ -1,5 +1,4 @@
 import { invoke, listen, languageName, explain, isMac, hotkeyName, trayName } from '../shared/app.js';
-import { bottomBar } from './bottom-bar.js';
 
 const $ = id => document.getElementById(id);
 let data;
@@ -32,8 +31,8 @@ function words(title, note, tone = '') {
 // A label row makes the whole line clickable for its control.
 const row = (title, note, control) => h('label', { className: 'row' }, words(title, note), control);
 const info = (title, note, end) => h('div', { className: 'row' }, words(title, note), end);
-function link(title, note, onclick) {
-  return h('button', { className: 'row link', onclick }, words(title, note), svg(CHEVRON));
+function link(title, note, onclick, end) {
+  return h('button', { className: 'row link', onclick }, words(title, note), end, svg(CHEVRON));
 }
 function field(label, control, note) {
   control.id ||= uid();
@@ -79,7 +78,7 @@ function save(change, refresh = false) {
   return saving;
 }
 
-const chosen = list => list[0];
+// The first engine in a list is the one in use; the second, if any, is its fallback.
 const provider = (list, id) => list.find(p => p.descriptor.id === id);
 const byName = tags => tags.map(t => [t, languageName(t)]).sort((a, b) => a[1].localeCompare(b[1], 'en'));
 
@@ -91,29 +90,31 @@ function readiness({ readiness: r }) {
   }
   return { tone: 'bad', label: r.state === 'unsupported' ? 'Not supported' : 'Needs setup', detail: r.message };
 }
-function status(label, p) {
-  if (!p) return info(label, 'No engine installed.', badge('bad', 'Missing'));
+
+// Translate: what you hear, what you read, and which engines do it.
+function engineLink(label, p) {
+  const open = () => { location.hash = 'engines'; };
+  if (!p) return link(label, 'No engine installed.', open, badge('bad', 'Missing'));
   const r = readiness(p);
-  return info(label, [p.descriptor.name, r.detail].filter(Boolean).join('. '), badge(r.tone, r.label));
+  return link(label, [p.descriptor.name, r.detail].filter(Boolean).join('. '), open, badge(r.tone, r.label));
 }
 
-function language() {
+function translate() {
   const s = data.settings;
-  const stt = provider(data.stt, chosen(s.stt)), tr = provider(data.translators, chosen(s.translators));
+  const stt = provider(data.stt, s.stt[0]), tr = provider(data.translators, s.translators[0]);
   const spoken = byName(stt?.languages.tags ?? []);
   if (stt?.languages.can_detect) spoken.unshift(['', languageName(null)]);
   const target = byName(tr?.languages.tags ?? []);
   const keep = (list, v) => list.some(([x]) => x === v) ? list : [[v, `${languageName(v)} (not supported by this engine)`], ...list];
   const autoNote = s.source_language ? null : 'Listens for a few seconds first, then picks the language it hears.';
   return [
-    heading('Language', 'Choose what you hear and what you read.'),
     group(null, [
       row('Spoken language', autoNote, select(keep(spoken, s.source_language ?? ''), s.source_language ?? '',
         v => save({ source_language: v || null }, true))),
       row('Translate to', null, select(keep(target, s.target_language), s.target_language,
         v => save({ target_language: v }, true))),
     ]),
-    group('Engines', [status('Speech recognition', stt), status('Translation', tr)]),
+    group('Engines in use', [engineLink('Speech recognition', stt), engineLink('Translation', tr)]),
   ];
 }
 
@@ -127,7 +128,6 @@ function audio() {
   }));
   const privacy = pane => () => invoke('open_privacy', { pane }).catch(problem);
   return [
-    heading('Audio', 'Pick what OpenLang listens to. Audio is never saved.'),
     group('Sources', data.sources.map(source), 'Keep at least one source on.'),
     isMac && group('Permissions', [
       link('System audio', 'Needed to hear films and calls.', privacy('system_audio')),
@@ -136,27 +136,111 @@ function audio() {
   ];
 }
 
-function engines(title, key, list) {
-  const s = data.settings, active = chosen(s[key]);
-  const pick = id => save({ [key]: [id, ...s[key].slice(1).filter(x => x !== id)] }, true);
-  return group(title, list.flatMap(p => {
-    const d = p.descriptor, on = d.id === active, r = readiness(p);
-    const input = h('input', { type: 'radio', name: key, checked: on });
-    input.addEventListener('change', () => pick(d.id));
-    input.addEventListener('keydown', e => e.key.startsWith('Arrow') && e.preventDefault());
-    const choice = h('label', { className: 'row choice' }, input, words(d.name, d.summary),
-      badge(r.tone, r.label), svg(CHECK));
-    return on ? [choice, options(key, list, p)] : [choice];
-  }).filter(Boolean));
+// Where a floating window sits: nine spots on a small screen, or wherever it was dragged.
+const WINDOWS = {
+  caption: { key: 'caption_place', label: 'Subtitle position' },
+  island: { key: 'island_place', label: 'Controls position' },
+};
+const EDGES = ['start', 'middle', 'end'];
+const SPOTS = [['Top left', 'Top center', 'Top right'], ['Left', 'Center', 'Right'], ['Bottom left', 'Bottom center', 'Bottom right']];
+function placeRow(name) {
+  const { key, label } = WINDOWS[name], place = data.settings[key];
+  const grid = h('div', { className: 'places', role: 'group', ariaLabel: label });
+  SPOTS.forEach((line, y) => line.forEach((spot, x) => {
+    const on = place.kind === 'preset' && place.h === EDGES[x] && place.v === EDGES[y];
+    const b = h('button', { className: 'place', title: spot, ariaLabel: spot, ariaPressed: String(on) });
+    b.addEventListener('click', () => invoke('set_preset', { window: name, h: EDGES[x], v: EDGES[y] }).catch(problem));
+    grid.append(b);
+  }));
+  const el = info('On screen', place.kind === 'custom' ? 'Placed by dragging.' : 'Pick a spot, or drag it on screen.', grid);
+  el.dataset.window = name;
+  return el;
+}
+// Dragging a window changes its place while this screen is open.
+function redrawPlaces() {
+  const focus = document.activeElement;
+  const owner = focus?.closest('[data-window]')?.dataset.window, spot = focus?.ariaLabel;
+  for (const old of document.querySelectorAll('[data-window]')) old.replaceWith(placeRow(old.dataset.window));
+  if (owner) document.querySelector(`[data-window=${owner}] .place[aria-label="${spot}"]`)?.focus();
 }
 
-function options(key, list, p) {
+function preview(style) {
+  const screen = h('div', { className: 'screen', ariaHidden: 'true' },
+    h('p', { className: 'sample' }, h('span', { className: 'original', textContent: 'Where is the nearest station?' }),
+      h('span', { className: 'translation', textContent: 'Di mana stasiun terdekat?' })));
+  screen.style.setProperty('--size', `${style.text_size}px`);
+  screen.dataset.show = style.show;
+  return screen;
+}
+
+const saveSubtitle = change => save({ subtitle: { ...data.settings.subtitle, ...change } });
+
+function subtitles() {
+  const s = data.settings, screen = preview(s.subtitle);
+  const size = h('input', { type: 'range', min: 11, max: 40, step: 1, value: s.subtitle.text_size, id: uid() });
+  const value = h('output', { className: 'value', textContent: `${s.subtitle.text_size} px` });
+  size.addEventListener('input', () => {
+    value.textContent = `${size.value} px`;
+    screen.style.setProperty('--size', `${size.value}px`);
+  });
+  size.addEventListener('change', () => saveSubtitle({ text_size: Number(size.value) }));
+  const show = v => { screen.dataset.show = v; saveSubtitle({ show: v }); };
+  return [
+    screen,
+    group('Look', [
+      h('div', { className: 'stack' },
+        h('div', { className: 'line' }, h('label', { className: 'title', htmlFor: size.id, textContent: 'Text size' }), value), size),
+      h('div', { className: 'stack' }, h('span', { className: 'title', textContent: 'Show' }), segmented('Show', [
+        ['both', 'Both'], ['translation', 'Translation'], ['original', 'Original'],
+      ], s.subtitle.show, show)),
+    ]),
+    group('Behaviour', [row('Click through subtitles', 'Clicks go to the app underneath.',
+      toggle(s.click_through, v => save({ click_through: v })))]),
+    group('Position', [placeRow('caption')]),
+  ];
+}
+
+function controls() {
+  const s = data.settings;
+  return [
+    group(null, [
+      row('Show controls', null, select([
+        ['always', 'Always'],
+        ['hide_listening', 'Hide while listening'],
+        ['problems', 'Only when action is needed'],
+      ], s.island_mode, v => save({ island_mode: v }))),
+      row('Sound bars', 'Three bars on the controls move with what OpenLang hears.',
+        toggle(s.sound_bars, v => save({ sound_bars: v }))),
+    ]),
+    group('Position', [placeRow('island')]),
+    group('Shortcut', [info('Start or stop', `Works in any app, or use OpenLang in ${trayName}.`,
+      isMac ? keys('⌃', '⌥', 'L') : keys('Ctrl', 'Alt', 'L'))]),
+  ];
+}
+
+// Engines: one list per kind; the engine in use shows its own settings below the list.
+function engineList(title, key, list) {
+  const s = data.settings, active = provider(list, s[key][0]);
+  const pick = id => save({ [key]: [id, ...s[key].slice(1).filter(x => x !== id)] }, true);
+  const choices = list.map(p => {
+    const d = p.descriptor, r = readiness(p);
+    const input = h('input', { type: 'radio', name: key, checked: p === active });
+    input.addEventListener('change', () => pick(d.id));
+    input.addEventListener('keydown', e => e.key.startsWith('Arrow') && e.preventDefault());
+    return h('label', { className: 'row choice' }, input, words(d.name, d.summary),
+      h('span', { className: 'badges' }, p.location === 'network' && badge('', 'Online'), badge(r.tone, r.label)),
+      svg(CHECK));
+  });
+  return [group(title, choices), active && engineOptions(key, list, active)];
+}
+
+function engineOptions(key, list, p) {
   const d = p.descriptor;
   const online = p.location === 'network' && h('p', { className: 'sub bad', textContent: 'Online: speech or text is sent to this address.' });
   const blocked = online && !data.settings.allow_network && h('p', { className: 'sub bad', textContent: 'Allow online engines is off, so this engine will not start.' });
   const parts = [...d.fields.map(f => fieldFor(d, f, p)), online, blocked, fallback(key, list, d.id)].filter(Boolean);
   if (!parts.length) return null;
-  return h('div', { className: 'options' }, ...parts);
+  return group(`${d.name} settings`, [h('div', { className: 'options' }, ...parts)]);
 }
 
 function fallback(key, list, active) {
@@ -181,93 +265,63 @@ function fieldFor(d, f, p) {
   return field(f.label, input);
 }
 
-function engine() {
-  const s = data.settings;
+function engines() {
   return [
-    heading('Engine', 'The engines that hear and translate.'),
-    engines('Speech recognition', 'stt', data.stt),
-    engines('Translation', 'translators', data.translators),
     group('Privacy', [row('Allow online engines', 'When off, speech and text never leave this computer.',
-      toggle(s.allow_network, v => save({ allow_network: v }, true)))]),
+      toggle(data.settings.allow_network, v => save({ allow_network: v }, true)))]),
+    ...engineList('Speech recognition', 'stt', data.stt),
+    ...engineList('Translation', 'translators', data.translators),
   ];
 }
 
-const EDGES = ['start', 'middle', 'end'];
-const PLACES = [['Top left', 'Top center', 'Top right'], ['Left', 'Center', 'Right'], ['Bottom left', 'Bottom center', 'Bottom right']];
-function places(title, name, place) {
-  const grid = h('div', { className: 'places', role: 'group', ariaLabel: title });
-  PLACES.forEach((line, y) => line.forEach((label, x) => {
-    const on = place.kind === 'preset' && place.h === EDGES[x] && place.v === EDGES[y];
-    const b = h('button', { className: 'place', title: label, ariaLabel: label, ariaPressed: String(on) });
-    b.addEventListener('click', () => invoke('set_preset', { window: name, h: EDGES[x], v: EDGES[y] }).catch(problem));
-    grid.append(b);
-  }));
-  const note = place.kind === 'custom' ? 'Placed by dragging.' : 'Or drag it on screen.';
-  return h('div', { className: 'spot' }, h('span', { className: 'title', textContent: title }), grid, h('span', { className: 'sub', textContent: note }));
-}
-const placePair = s => h('div', { className: 'pair' },
-  places('Subtitles', 'caption', s.caption_place), places('Controls', 'island', s.island_place));
+// Every area of the settings, in sidebar order. Sidebar, headings and routing all come from here.
+const icon = path => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}"/></svg>`;
+const VIEWS = [
+  { id: 'translate', title: 'Translate', text: 'What you hear and what you read.', build: translate,
+    icon: icon('M3 6h9M7.500 3.500V6M10.500 6c-.8 4-3.300 7-7 9M5 9c1.200 2.700 3.200 4.600 6 5.800M12.500 20.500l4-10 4 10M14 17h5') },
+  { id: 'listen', title: 'Listen', text: 'What OpenLang listens to. Audio is never saved.', build: audio,
+    icon: icon('M4 10v4M8 7v10M12 4v16M16 8v8M20 10.500v3') },
+  // A sample subtitle shows where the real one will be while this view is open.
+  { id: 'subtitles', title: 'Subtitles', text: 'How subtitles look and where they sit.', build: subtitles, preview: true,
+    icon: icon('M4 19 10 5l6 14M6.200 14h7.600M16 19l3-7 3 7M17 17h4') },
+  { id: 'controls', title: 'Controls', text: 'The floating controls and the shortcut.', build: controls,
+    icon: icon('M7 8h10a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8zM8 12h.01') },
+  { id: 'engines', title: 'Engines', text: 'The engines that hear and translate.', build: engines,
+    icon: icon('M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4') },
+];
 
-function preview(style) {
-  const screen = h('div', { className: 'screen', ariaHidden: 'true' },
-    h('p', { className: 'sample' }, h('span', { className: 'original', textContent: 'Where is the nearest station?' }),
-      h('span', { className: 'translation', textContent: 'Di mana stasiun terdekat?' })));
-  screen.style.setProperty('--size', `${style.text_size}px`);
-  screen.dataset.show = style.show;
-  return screen;
-}
+const links = VIEWS.map(v => h('a', { className: 'nav', href: `#${v.id}`, innerHTML: v.icon }, v.title));
+const sections = VIEWS.map(v => h('section', { role: 'region', ariaLabel: v.title, hidden: true }));
+$('nav').append(...links);
+$('main').append(...sections);
 
-const saveSubtitle = change => save({ subtitle: { ...data.settings.subtitle, ...change } });
-
-function display() {
-  const s = data.settings, screen = preview(s.subtitle);
-  const size = h('input', { type: 'range', min: 11, max: 40, step: 1, value: s.subtitle.text_size });
-  const value = h('output', { className: 'value', textContent: `${s.subtitle.text_size} px` });
-  size.addEventListener('input', () => {
-    value.textContent = `${size.value} px`;
-    screen.style.setProperty('--size', `${size.value}px`);
-  });
-  size.addEventListener('change', () => saveSubtitle({ text_size: Number(size.value) }));
-  size.id = uid();
-  const show = v => { screen.dataset.show = v; saveSubtitle({ show: v }); };
-  return [
-    heading('Display', 'How subtitles look and where things sit.'),
-    screen,
-    group('Subtitles', [
-      h('div', { className: 'stack' },
-        h('div', { className: 'line' }, h('label', { className: 'title', htmlFor: size.id, textContent: 'Text size' }), value), size),
-      h('div', { className: 'stack' }, h('span', { className: 'title', textContent: 'Show' }), segmented('Show', [
-        ['both', 'Both'], ['translation', 'Translation'], ['original', 'Original'],
-      ], s.subtitle.show, show)),
-      row('Click through subtitles', 'Clicks go to the app underneath.',
-        toggle(s.click_through, v => save({ click_through: v }))),
-    ]),
-    group('Position', [placePair(s)]),
-    group('Controls', [
-      row('Show controls', null, select([
-        ['always', 'Always'],
-        ['hide_listening', 'Hide while listening'],
-        ['problems', 'Only when action is needed'],
-      ], s.island_mode, v => save({ island_mode: v }))),
-      row('Sound bars', 'Three bars on the controls move with what OpenLang hears.',
-        toggle(s.sound_bars, v => save({ sound_bars: v }))),
-      info('Start or stop', `Works in any app, or use OpenLang in ${trayName}.`,
-        isMac ? keys('⌃', '⌥', 'L') : keys('Ctrl', 'Alt', 'L')),
-    ]),
-  ];
-}
-
-const views = { language, audio, engine, display };
 function draw() {
   const y = $('main').scrollTop;
-  for (const [name, view] of Object.entries(views)) $(`tab-${name}`).replaceChildren(...view().filter(Boolean));
+  VIEWS.forEach((v, i) => sections[i].replaceChildren(heading(v.title, v.text), ...v.build().filter(Boolean)));
   $('main').scrollTop = y;
 }
-function redrawPlaces() {
-  const root = $('tab-display'), focus = document.activeElement?.ariaLabel, spot = document.activeElement?.parentElement?.ariaLabel;
-  root.querySelector('.pair')?.replaceWith(placePair(data.settings));
-  if (focus) [...root.querySelectorAll('.place')].find(b => b.ariaLabel === focus && b.parentElement.ariaLabel === spot)?.focus();
+let current;
+function show() {
+  const i = Math.max(0, VIEWS.findIndex(v => v.id === location.hash.slice(1)));
+  if (current === i) return;
+  current = i;
+  VIEWS.forEach((v, k) => {
+    sections[k].hidden = k !== i;
+    if (k === i) links[k].ariaCurrent = 'page'; else links[k].removeAttribute('aria-current');
+  });
+  invoke('preview', { on: !!VIEWS[i].preview });
+  $('main').scrollTop = 0;
 }
+// Up and down move through the sidebar like a list.
+$('nav').addEventListener('keydown', e => {
+  const move = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+  if (!move) return;
+  e.preventDefault();
+  const next = links[(current + move + links.length) % links.length];
+  next.focus();
+  next.click();
+});
+
 async function load() {
   try {
     data = await invoke('snapshot');
@@ -276,18 +330,11 @@ async function load() {
   } catch (e) { $('loading').hidden = true; problem(e); }
 }
 
-// macOS draws the window buttons over the page, so the top strip makes room and moves the window.
+// macOS draws the window buttons over the page, so the sidebar and the strip above the view make room.
 if (isMac) document.documentElement.dataset.chrome = 'blend';
-$('main').addEventListener('scroll', () => $('top').classList.toggle('edge', $('main').scrollTop > 0), { passive: true });
-
-bottomBar($('bar'), name => {
-  for (const key of Object.keys(views)) $(`tab-${key}`).hidden = key !== name;
-  // A sample subtitle shows where the real one will be.
-  invoke('preview', { on: name === 'display' });
-  $('main').scrollTop = 0;
-});
+addEventListener('hashchange', show);
+show();
 await load();
-// Dragging a window changes its place while this screen is open.
 await listen('settings', e => { if (data) { data.settings = e.payload; redrawPlaces(); } });
 // A model may have been downloaded while this window was in the background.
 await listen('status', e => { if (e.payload.state === 'listening') load(); });
