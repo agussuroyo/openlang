@@ -59,16 +59,9 @@ impl Download<'_> {
             NEXT.fetch_add(1, Relaxed)
         ));
         let part = PathBuf::from(part);
-        let result = self.write(&part, progress).and_then(|()| {
-            // Windows refuses to replace a file; one that exists is already verified.
-            fs::rename(&part, path).or_else(|e| {
-                if path.is_file() {
-                    Ok(())
-                } else {
-                    Err(failed(e))
-                }
-            })
-        });
+        let result = self
+            .write(&part, progress)
+            .and_then(|()| place(&part, path));
         let _ = fs::remove_file(&part);
         result
     }
@@ -110,6 +103,23 @@ impl Download<'_> {
     }
 }
 
+/// Gives a verified `part` its final name, but never replaces a file that already has it: that
+/// one is verified too, and someone may be opening it. On Windows, replacing a file fails an
+/// `fopen` of it made at that moment (whisper.cpp then cannot load its model). A hard link
+/// fails when `path` exists, atomically; a file system without hard links gets a rename.
+fn place(part: &Path, path: &Path) -> Result<()> {
+    if fs::hard_link(part, path).is_ok() || path.is_file() {
+        return Ok(());
+    }
+    fs::rename(part, path).or_else(|e| {
+        if path.is_file() {
+            Ok(())
+        } else {
+            Err(failed(e))
+        }
+    })
+}
+
 /// Removes parts left behind by an app that was stopped mid-download, in `directory` and
 /// `depth` levels of folders below it. Parts of this process may still be written and stay.
 /// Links are never followed.
@@ -149,6 +159,26 @@ mod tests {
         assert!(download.fetch(&path, &|_| {}).is_err());
         assert!(!path.exists());
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_finished_download_never_replaces_the_file() {
+        let directory = std::env::temp_dir().join(format!("openlang-place-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("model.bin");
+        let part = directory.join("model.bin.1-0.part");
+        fs::write(&part, "first").unwrap();
+        place(&part, &path).unwrap();
+        // As `fetch` does: a linked part shares the file.
+        fs::remove_file(&part).unwrap();
+        fs::write(&part, "second").unwrap();
+        // Held open, as a model being loaded is.
+        let reader = File::open(&path).unwrap();
+        place(&part, &path).unwrap();
+        drop(reader);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
         let _ = fs::remove_dir_all(directory);
     }
 

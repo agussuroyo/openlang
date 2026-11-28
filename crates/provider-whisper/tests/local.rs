@@ -48,7 +48,7 @@ fn recognizes_speech_and_detects_the_language() {
 
 fn detector() -> Box<dyn DetectorSession> {
     let detector = registry().detector.unwrap();
-    detector.prepare(&Job::default(), &|_| {}).unwrap();
+    contract::make_ready(detector.as_ref(), &Job::default());
     detector
         .open(["en", "id", "ja"].map(String::from).to_vec())
         .unwrap()
