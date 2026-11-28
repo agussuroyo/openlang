@@ -151,6 +151,17 @@ pub fn translation(t: &dyn Translator, job: &Job, text: &str) -> String {
     first
 }
 
+/// The most a step may take for captions to keep up with speech. Shared CI runners are slower
+/// and busier than a user's computer, so they get three times as long.
+pub fn budget(millis: u64) -> Duration {
+    let scale = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
+    Duration::from_millis(millis * scale)
+}
+
 /// Delays of one kind, over `count` updates.
 #[derive(Debug)]
 pub struct Latency {
@@ -308,7 +319,10 @@ impl AudioSource for Player {
         std::thread::spawn(move || {
             let began = Instant::now();
             let every = AudioFormat::SPEECH.sample_rate as usize / 50;
-            for (i, part) in samples.chunks(every).enumerate() {
+            // A device keeps delivering silence after the talk, so the last pause is heard.
+            let silence = vec![0.0; every];
+            let parts = samples.chunks(every).chain(std::iter::repeat(&silence[..]));
+            for (i, part) in parts.enumerate() {
                 if stop.load(SeqCst) {
                     return;
                 }

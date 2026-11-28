@@ -103,7 +103,6 @@ impl Segmenter {
                 start: offset + u.start,
                 end: offset + u.end,
                 is_final: u.is_final,
-                speaker: None,
             },
             language: u.language.unwrap_or_else(|| self.language.clone()),
             text: u.text,
@@ -274,7 +273,7 @@ impl TranslatorChain {
     fn warm_up(&mut self) {
         if let Some((provider, job)) = self.providers.first()
             && let Some(source) = &job.source
-            && primary(source) != primary(&self.target)
+            && !same_language(source, &self.target)
         {
             self.session = provider.open(job).ok();
         }
@@ -282,7 +281,7 @@ impl TranslatorChain {
 
     /// Every failure goes to `report`, when there is one.
     fn translate(&mut self, text: &str, source: &str, report: Option<&Emitter>) -> Result<String> {
-        if primary(source) == primary(&self.target) {
+        if same_language(source, &self.target) {
             return Ok(text.to_owned());
         }
         let mut last = Error::Config("no translator selected".into());
@@ -454,6 +453,35 @@ impl TranslateNode {
 /// `en-US` and `en` are the same language for translation purposes.
 pub fn primary(tag: &str) -> &str {
     tag.split(['-', '_']).next().unwrap_or(tag)
+}
+
+/// Chinese in traditional characters: `zh-Hant`, or a region that writes them.
+pub fn traditional_chinese(tag: &str) -> bool {
+    primary(tag).eq_ignore_ascii_case("zh")
+        && tag.split(['-', '_']).skip(1).any(|part| {
+            ["hant", "tw", "hk", "mo"]
+                .iter()
+                .any(|t| part.eq_ignore_ascii_case(t))
+        })
+}
+
+/// Text in `a` reads as `b` without translation. Chinese scripts count as different.
+pub fn same_language(a: &str, b: &str) -> bool {
+    primary(a).eq_ignore_ascii_case(primary(b)) && traditional_chinese(a) == traditional_chinese(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chinese_scripts_are_different_languages() {
+        assert!(same_language("id-ID", "id"));
+        assert!(same_language("zh", "zh-Hans"));
+        assert!(same_language("zh-TW", "zh_Hant"));
+        assert!(!same_language("zh-CN", "zh-Hant"));
+        assert!(!same_language("en", "id"));
+    }
 }
 
 impl Node for TranslateNode {

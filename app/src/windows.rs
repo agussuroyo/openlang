@@ -21,7 +21,8 @@ pub enum Floating {
 }
 
 impl Floating {
-    pub const ALL: [Self; 2] = [Self::Caption, Self::Island];
+    #[cfg(target_os = "macos")]
+    const ALL: [Self; 2] = [Self::Caption, Self::Island];
 
     pub fn label(self) -> &'static str {
         match self {

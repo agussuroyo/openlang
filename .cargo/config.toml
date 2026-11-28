@@ -1,5 +1,10 @@
 [env]
 MACOSX_DEPLOYMENT_TARGET = "26.0"
+# whisper.cpp would otherwise target the build machine's processor, and a build from a newer
+# one would crash on older ones. The baseline is x86_64 with AVX2 and ARMv8.2 with dotprod (Apple
+# M1, Snapdragon X); `openlang_core::cpu` checks it at run time.
+GGML_NATIVE = "OFF"
+GGML_CPU_ARM_ARCH = "armv8.2-a+dotprod+fp16"
 
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]

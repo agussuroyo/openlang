@@ -6,10 +6,11 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-default = ["apple", "coreaudio", "cpal", "openai", "whisper"]
+default = ["apple", "bergamot", "coreaudio", "cpal", "openai", "whisper"]
 openai = ["dep:openlang-provider-openai"]
 whisper = ["dep:openlang-provider-whisper"]
 apple = ["dep:openlang-provider-apple"]
+bergamot = ["dep:openlang-provider-bergamot"]
 coreaudio = ["dep:openlang-audio-coreaudio"]
 cpal = ["dep:openlang-audio-cpal"]
 
@@ -20,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 openlang-core.workspace = true
 openlang-audio-dsp.workspace = true
 openlang-audio-cpal = { workspace = true, optional = true }
+openlang-provider-bergamot = { workspace = true, optional = true }
 openlang-provider-openai = { workspace = true, optional = true }
 openlang-provider-whisper = { workspace = true, optional = true }
 serde.workspace = true

@@ -1,3 +1,5 @@
 /target
 .DS_Store
 /app/gen/schemas
+# Built by CI from Khronos sources, see .github/workflows/ci.yml.
+/app/vulkan-1.dll

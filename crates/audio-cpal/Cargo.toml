@@ -9,5 +9,9 @@ publish.workspace = true
 openlang-core.workspace = true
 cpal = "0.18.2"
 
+# The PulseAudio host is pure Rust and also talks to PipeWire, so no system library is needed.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "=0.30.1", default-features = false, features = ["core_audio", "macos_15_0"] }

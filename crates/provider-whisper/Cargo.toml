@@ -7,15 +7,16 @@ publish.workspace = true
 
 [dependencies]
 openlang-core.workspace = true
+openlang-models.workspace = true
 openlang-speech-chunks.workspace = true
-sha2 = "0.10"
-ureq.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16", features = ["metal"] }
 
+# The graphics card through Vulkan. Without a usable one, whisper.cpp runs on the CPU.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-whisper-rs = "0.16"
+whisper-rs = { version = "0.16", features = ["vulkan"] }
 
 [dev-dependencies]
 openlang-contract.workspace = true
+openlang-provider-bergamot.workspace = true
