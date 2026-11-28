@@ -14,6 +14,8 @@ env:
   CARGO_TERM_COLOR: always
   # A build that silently fell back to the slow scalar translation kernel fails instead.
   FXTRANSLATE_REQUIRE_SIMD: "1"
+  # Panics keep file and line; full debug info only made compiling, linking and the cache slower.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   check:
@@ -100,9 +102,11 @@ jobs:
         if: runner.os == 'Windows'
         run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
 
+      # Saved also when a job fails, so the next push after a red run starts warm.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> ${{ env.CARGO_TARGET_DIR || 'target' }}"
+          cache-on-failure: true
 
       - run: make check
       - run: make test ARGS="${{ matrix.test }}"
